@@ -147,6 +147,44 @@ describe('wrangler-formatter', () => {
       expect(result).toContain('✅ Execution Successful');
       expect(result).toContain('Execution Time: 150ms');
     });
+
+    it('should pretty-print JSON output', () => {
+      const jsonOutput = JSON.stringify({ total_count: 2, items: [{ id: 1, name: 'test' }] });
+      const result = formatExecutionResult({
+        success: true,
+        output: jsonOutput,
+        execution_time_ms: 100,
+      });
+      
+      expect(result).toContain('✅ Execution Successful');
+      expect(result).toContain('Output:');
+      // Should contain pretty-printed JSON with proper indentation
+      expect(result).toContain('"total_count": 2');
+      expect(result).toContain('"items":');
+    });
+
+    it('should pretty-print nested JSON in MCP response format', () => {
+      const mcpResponse = JSON.stringify({
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ total_count: 2, items: [] }),
+          },
+        ],
+      });
+      const result = formatExecutionResult({
+        success: true,
+        output: mcpResponse,
+        execution_time_ms: 100,
+      });
+      
+      expect(result).toContain('✅ Execution Successful');
+      expect(result).toContain('Output:');
+      // The nested JSON is pretty-printed within the text field (as a string)
+      // So we check for the escaped version that appears in the output
+      expect(result).toContain('\\"total_count\\"');
+      expect(result).toContain('\\"items\\"');
+    });
   });
 });
 

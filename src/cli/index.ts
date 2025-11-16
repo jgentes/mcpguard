@@ -896,7 +896,7 @@ async function listSavedConfigs() {
       envKeys.forEach((key) => {
         const value = entry.config.env?.[key]
         // Don't show full values, just indicate if it's an env var reference
-        if (value.startsWith('${') && value.endsWith('}')) {
+        if (value && value.startsWith('${') && value.endsWith('}')) {
           console.log(`       ${key}: ${value}`)
         } else {
           console.log(`       ${key}: [hidden]`)

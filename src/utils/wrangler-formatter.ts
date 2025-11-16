@@ -245,6 +245,104 @@ export function formatWranglerError(
 }
 
 /**
+ * Format nested JSON structure for better readability
+ * Handles cases where JSON contains string fields with nested JSON
+ */
+function formatNestedJsonStructure(obj: any, indent = 0): string {
+  const indentStr = '  '.repeat(indent)
+  const nextIndent = indent + 1
+  const nextIndentStr = '  '.repeat(nextIndent)
+
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return '[]'
+    const items = obj.map((item) => {
+      const formatted = formatNestedJsonStructure(item, nextIndent)
+      // Handle multi-line items (objects/arrays)
+      if (formatted.includes('\n')) {
+        return `${nextIndentStr}${formatted}`
+      }
+      return `${nextIndentStr}${formatted}`
+    })
+    return `[\n${items.join(',\n')}\n${indentStr}]`
+  }
+
+  if (obj && typeof obj === 'object') {
+    const keys = Object.keys(obj)
+    if (keys.length === 0) return '{}'
+    const entries = keys.map((key) => {
+      const value = obj[key]
+      if (
+        key === 'text' &&
+        typeof value === 'string' &&
+        (value.trim().startsWith('{') || value.trim().startsWith('['))
+      ) {
+        // Try to parse and format nested JSON in text fields
+        try {
+          const parsed = JSON.parse(value)
+          const formatted = formatNestedJsonStructure(parsed, nextIndent)
+          return `${nextIndentStr}"${key}": ${formatted}`
+        } catch {
+          // If parsing fails, treat as regular string
+          return `${nextIndentStr}"${key}": ${JSON.stringify(value)}`
+        }
+      } else {
+        const formattedValue = formatNestedJsonStructure(value, nextIndent)
+        return `${nextIndentStr}"${key}": ${formattedValue}`
+      }
+    })
+    return `{\n${entries.join(',\n')}\n${indentStr}}`
+  }
+
+  // Primitive values
+  return JSON.stringify(obj)
+}
+
+/**
+ * Try to parse and pretty-print JSON from a string
+ * Returns the pretty-printed JSON if successful, null otherwise
+ */
+function tryPrettyPrintJson(str: string): string | null {
+  // Handle "Result: " prefix from console.log statements
+  let jsonStr = str.trim()
+  const resultPrefix = 'Result: '
+  if (jsonStr.startsWith(resultPrefix)) {
+    jsonStr = jsonStr.substring(resultPrefix.length).trim()
+  }
+
+  // First, try to parse the entire string as JSON
+  try {
+    const parsed = JSON.parse(jsonStr)
+    // Use custom formatter that handles nested JSON strings
+    const formatted = formatNestedJsonStructure(parsed, 0)
+    // If we had a prefix, add it back
+    if (str.startsWith(resultPrefix)) {
+      return `${resultPrefix}${formatted}`
+    }
+    return formatted
+  } catch {
+    // If parsing the entire string fails, try to find JSON objects/arrays within the text
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}|\[[\s\S]*\]/)
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0])
+        // Use custom formatter
+        const formatted = formatNestedJsonStructure(parsed, 0)
+        const result = jsonStr.replace(jsonMatch[0], formatted)
+        // If we had a prefix, add it back
+        if (str.startsWith(resultPrefix)) {
+          return `${resultPrefix}${result}`
+        }
+        return result
+      } catch {
+        // If we can't parse the matched JSON either, return null
+        return null
+      }
+    }
+    return null
+  }
+}
+
+/**
  * Format execution result for display
  */
 export function formatExecutionResult(result: {
@@ -270,10 +368,21 @@ export function formatExecutionResult(result: {
 
   if (result.output) {
     lines.push('Output:')
-    const outputLines = result.output.split('\n')
-    for (const line of outputLines) {
-      if (line.trim()) {
+    // Try to pretty-print JSON in the output
+    const prettyPrinted = tryPrettyPrintJson(result.output)
+    if (prettyPrinted) {
+      // Split the pretty-printed JSON into lines and indent each line
+      const outputLines = prettyPrinted.split('\n')
+      for (const line of outputLines) {
         lines.push(`  ${line}`)
+      }
+    } else {
+      // If not JSON, display as-is
+      const outputLines = result.output.split('\n')
+      for (const line of outputLines) {
+        if (line.trim()) {
+          lines.push(`  ${line}`)
+        }
       }
     }
     lines.push('')

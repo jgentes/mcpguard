@@ -10,6 +10,13 @@
 
 import type { WorkerCode } from '../types/worker.js'
 
+// ExecutionContext is a global type in Cloudflare Workers runtime
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type ExecutionContext = {
+  waitUntil(promise: Promise<any>): void
+  passThroughOnException(): void
+}
+
 interface Env {
   LOADER: {
     get(
@@ -124,14 +131,4 @@ export default {
       )
     }
   },
-}
-
-function _calculateTokensSaved(mcpCalls: number): number {
-  // Traditional tool calling: ~1500 tokens per call
-  const traditionalTokens = mcpCalls * 1500
-
-  // Code mode: ~300 tokens for code + ~100 tokens per result
-  const codeModeTokens = 300 + mcpCalls * 100
-
-  return Math.max(0, traditionalTokens - codeModeTokens)
 }
