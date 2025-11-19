@@ -1,30 +1,12 @@
+import type { WorkerManager } from '../../src/server/worker-manager.js'
 import { ConfigManager } from '../../src/utils/config-manager.js'
-import { WorkerManager } from '../../src/server/worker-manager.js'
-
-/**
- * Known test MCP config names that should be cleaned up
- * These are the names used in tests that might get saved to the real config file
- */
-const TEST_CONFIG_NAMES = [
-  'filesystem-test',
-  'memory-test',
-  'fetch-test',
-  'test-mcp',
-  'test-id',
-  'simple',
-  'no-env',
-  'tool1',
-  'tool2',
-  'test',
-  'nested',
-  'missing',
-  'github',
-  'imported_tool',
-  'tool',
-] as const
 
 /**
  * Test helper to track and clean up MCP configs created during tests
+ *
+ * IMPORTANT: Only configs explicitly tracked via trackConfig() will be deleted.
+ * This prevents accidentally deleting real user configurations.
+ * Tests MUST call trackConfig() for every config they create.
  */
 export class TestConfigCleanup {
   private configManager: ConfigManager
@@ -36,70 +18,32 @@ export class TestConfigCleanup {
 
   /**
    * Track an MCP config name that was created during tests
+   * This config will be deleted during cleanup.
+   *
+   * Tests MUST call this for every config they create to prevent
+   * accidentally deleting real user configurations.
    */
   trackConfig(mcpName: string): void {
     this.testConfigNames.add(mcpName)
   }
 
   /**
-   * Clean up all tracked test configs AND known test config names
-   * This ensures we clean up configs even if tracking failed
+   * Clean up all tracked test configs ONLY
+   *
+   * This only deletes configs that were explicitly tracked via trackConfig().
+   * We do NOT use string matching or heuristics to avoid accidentally
+   * deleting real user configurations (e.g., a real "github" MCP).
    */
   cleanup(): void {
-    const configsToDelete = new Set<string>()
-
-    // Add tracked configs
-    for (const name of this.testConfigNames) {
-      configsToDelete.add(name)
+    if (this.testConfigNames.size === 0) {
+      return
     }
 
-    // Add known test config names
-    for (const name of TEST_CONFIG_NAMES) {
-      configsToDelete.add(name)
-    }
-
-    // Also check the actual config file for any test configs
-    // This catches configs that were saved even if tracking failed
-    try {
-      const savedConfigs = this.configManager.getSavedConfigs()
-      for (const name of Object.keys(savedConfigs)) {
-        // If it matches a test pattern, add it
-        const lowerName = name.toLowerCase()
-        if (
-          TEST_CONFIG_NAMES.includes(name as any) ||
-          lowerName.includes('-test') ||
-          lowerName === 'test' ||
-          lowerName.startsWith('test-') ||
-          lowerName.includes('test-') ||
-          // Also catch common test patterns
-          lowerName === 'simple' ||
-          lowerName === 'no-env' ||
-          lowerName === 'tool1' ||
-          lowerName === 'tool2' ||
-          lowerName === 'nested' ||
-          lowerName === 'missing' ||
-          lowerName === 'github' ||
-          lowerName === 'tool' ||
-          lowerName === 'imported_tool' ||
-          lowerName.startsWith('filesystem') ||
-          lowerName.startsWith('memory')
-        ) {
-          configsToDelete.add(name)
-        }
-      }
-    } catch (error) {
-      // Ignore errors when reading configs
-    }
-
-    // Delete all identified test configs
-    let deletedCount = 0
-    for (const mcpName of configsToDelete) {
+    // Delete only tracked configs
+    for (const mcpName of this.testConfigNames) {
       try {
-        const deleted = this.configManager.deleteConfig(mcpName)
-        if (deleted) {
-          deletedCount++
-        }
-      } catch (error) {
+        this.configManager.deleteConfig(mcpName)
+      } catch {
         // Ignore cleanup errors (config might not exist or already deleted)
       }
     }
@@ -142,7 +86,7 @@ export async function cleanupWorkerManagers(): Promise<void> {
     async (manager) => {
       try {
         await manager.shutdown()
-      } catch (error) {
+      } catch {
         // Ignore cleanup errors
       }
     },

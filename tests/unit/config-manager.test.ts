@@ -41,21 +41,6 @@ describe('ConfigManager', () => {
     } catch (error) {
       // Ignore cleanup errors
     }
-    
-    // Track any configs that might have been saved to the real config file
-    // (in case importConfigs wasn't called before saveConfig)
-    if (manager) {
-      try {
-        const savedConfigs = manager.getSavedConfigs();
-        for (const name of Object.keys(savedConfigs)) {
-          if (['simple', 'no-env', 'tool1', 'tool2', 'test', 'nested', 'missing', 'github', 'imported_tool', 'tool'].includes(name)) {
-            testConfigCleanup.trackConfig(name);
-          }
-        }
-      } catch (error) {
-        // Ignore errors
-      }
-    }
   });
 
   afterAll(() => {
@@ -81,8 +66,10 @@ describe('ConfigManager', () => {
         },
       };
 
-      manager.saveConfig('github', config);
-      const retrieved = manager.getSavedConfig('github');
+      const configName = 'github';
+      testConfigCleanup.trackConfig(configName);
+      manager.saveConfig(configName, config);
+      const retrieved = manager.getSavedConfig(configName);
 
       expect(retrieved).toBeDefined();
       expect(retrieved?.command).toBe('npx');
@@ -101,8 +88,10 @@ describe('ConfigManager', () => {
         },
       };
 
-      manager.saveConfig('simple', config);
-      const retrieved = manager.getSavedConfig('simple');
+      const configName = 'simple';
+      testConfigCleanup.trackConfig(configName);
+      manager.saveConfig(configName, config);
+      const retrieved = manager.getSavedConfig(configName);
 
       expect(retrieved?.command).toBe('node');
       expect(retrieved?.args).toBeUndefined();
@@ -118,8 +107,10 @@ describe('ConfigManager', () => {
         args: ['tool'],
       };
 
-      manager.saveConfig('no-env', config);
-      const retrieved = manager.getSavedConfig('no-env');
+      const configName = 'no-env';
+      testConfigCleanup.trackConfig(configName);
+      manager.saveConfig(configName, config);
+      const retrieved = manager.getSavedConfig(configName);
 
       expect(retrieved?.command).toBe('npx');
       expect(retrieved?.env).toBeUndefined();
@@ -149,8 +140,12 @@ describe('ConfigManager', () => {
         args: ['tool2'],
       };
 
-      manager.saveConfig('tool1', config1);
-      manager.saveConfig('tool2', config2);
+      const configName1 = 'tool1';
+      const configName2 = 'tool2';
+      testConfigCleanup.trackConfig(configName1);
+      testConfigCleanup.trackConfig(configName2);
+      manager.saveConfig(configName1, config1);
+      manager.saveConfig(configName2, config2);
 
       const configs = manager.getSavedConfigs();
 
@@ -179,7 +174,9 @@ describe('ConfigManager', () => {
 
       expect(result.imported).toBe(1);
       expect(result.errors).toHaveLength(0);
-      expect(manager.getSavedConfig('imported_tool')).toBeDefined();
+      const importedToolName = 'imported_tool';
+      testConfigCleanup.trackConfig(importedToolName);
+      expect(manager.getSavedConfig(importedToolName)).toBeDefined();
       expect(manager.getCursorConfigPath()).toBe(importPath);
     });
   });
@@ -194,12 +191,14 @@ describe('ConfigManager', () => {
         args: ['tool'],
       };
 
-      manager.saveConfig('tool', config);
-      expect(manager.getSavedConfig('tool')).toBeDefined();
+      const configName = 'tool';
+      testConfigCleanup.trackConfig(configName);
+      manager.saveConfig(configName, config);
+      expect(manager.getSavedConfig(configName)).toBeDefined();
 
-      const deleted = manager.deleteConfig('tool');
+      const deleted = manager.deleteConfig(configName);
       expect(deleted).toBe(true);
-      expect(manager.getSavedConfig('tool')).toBeNull();
+      expect(manager.getSavedConfig(configName)).toBeNull();
     });
 
     it('should return false for non-existent config', () => {
@@ -242,8 +241,10 @@ describe('ConfigManager', () => {
         },
       };
 
-      manager.saveConfig('test', config);
-      const resolved = manager.getSavedConfig('test');
+      const configName = 'test';
+      testConfigCleanup.trackConfig(configName);
+      manager.saveConfig(configName, config);
+      const resolved = manager.getSavedConfig(configName);
 
       expect(resolved?.env?.TOKEN).toBe('test-value');
       expect(resolved?.env?.KEY).toBe('another-value');
@@ -260,8 +261,10 @@ describe('ConfigManager', () => {
         },
       };
 
-      manager.saveConfig('nested', config);
-      const resolved = manager.getSavedConfig('nested');
+      const configName = 'nested';
+      testConfigCleanup.trackConfig(configName);
+      manager.saveConfig(configName, config);
+      const resolved = manager.getSavedConfig(configName);
 
       expect(resolved?.env?.NESTED).toContain('test-value');
     });
@@ -277,8 +280,10 @@ describe('ConfigManager', () => {
         },
       };
 
-      manager.saveConfig('missing', config);
-      const resolved = manager.getSavedConfig('missing');
+      const configName = 'missing';
+      testConfigCleanup.trackConfig(configName);
+      manager.saveConfig(configName, config);
+      const resolved = manager.getSavedConfig(configName);
 
       expect(resolved?.env?.MISSING).toBe('${NON_EXISTENT_VAR}');
     });
@@ -306,8 +311,12 @@ describe('ConfigManager', () => {
 
       expect(result.imported).toBe(2);
       expect(result.errors).toHaveLength(0);
-      expect(manager.getSavedConfig('github')).toBeDefined();
-      expect(manager.getSavedConfig('test')).toBeDefined();
+      const githubConfigName = 'github';
+      const testConfigName = 'test';
+      testConfigCleanup.trackConfig(githubConfigName);
+      testConfigCleanup.trackConfig(testConfigName);
+      expect(manager.getSavedConfig(githubConfigName)).toBeDefined();
+      expect(manager.getSavedConfig(testConfigName)).toBeDefined();
     });
 
     it('should return error for non-existent file', () => {
