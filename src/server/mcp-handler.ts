@@ -1070,11 +1070,30 @@ console.log(JSON.stringify(result, null, 2));`
 
     logger.info('MCP Guard server started')
 
-    // Graceful shutdown
-    process.on('SIGINT', async () => {
+    // Graceful shutdown handler
+    const shutdown = async () => {
       logger.info('Shutting down gracefully...')
-      await this.server.close()
-      process.exit(0)
-    })
+      
+      try {
+        // Close MCP server
+        await Promise.race([
+          this.server.close(),
+          new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+        ])
+        
+        // Clean up WorkerManager resources
+        await this.workerManager.shutdown()
+        
+        logger.info('Shutdown complete')
+      } catch (error: any) {
+        logger.error({ error }, 'Error during shutdown')
+      } finally {
+        process.exit(0)
+      }
+    }
+
+    // Handle both SIGINT (Ctrl-C) and SIGTERM
+    process.on('SIGINT', shutdown)
+    process.on('SIGTERM', shutdown)
   }
 }

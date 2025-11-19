@@ -131,7 +131,10 @@ export class WorkerManager {
         const address = this.rpcServer?.address()
         if (address && typeof address === 'object') {
           this.rpcPort = address.port
-          logger.info({ port: this.rpcPort }, 'MCP RPC server started')
+          logger.info(
+            { port: this.rpcPort },
+            'MCP RPC bridge server started (bridges Cloudflare Workers to Node.js MCP clients)',
+          )
         }
         resolve()
       })
@@ -1371,5 +1374,82 @@ ${mcpBindingStubs}
 
       throw new WorkerError(`Wrangler execution failed: ${error.message}`)
     }
+  }
+
+  /**
+   * Clean up all resources (RPC server, MCP clients, processes)
+   * Called during graceful shutdown
+   */
+  async shutdown(): Promise<void> {
+    logger.info('Shutting down WorkerManager...')
+
+    // Close RPC server
+    if (this.rpcServer) {
+      await new Promise<void>((resolve) => {
+        this.rpcServer?.close(() => {
+          logger.info('RPC server closed')
+          resolve()
+        })
+        // Force close after 2 seconds
+        setTimeout(() => {
+          resolve()
+        }, 2000)
+      })
+      this.rpcServer = null
+    }
+
+    // Close all MCP clients and kill processes
+    const cleanupPromises: Promise<void>[] = []
+    for (const [mcpId, client] of this.mcpClients.entries()) {
+      cleanupPromises.push(
+        (async () => {
+          try {
+            const transport = (client as any)._transport
+            if (transport && typeof transport.close === 'function') {
+              await transport.close()
+            }
+          } catch (error: any) {
+            logger.warn({ error, mcpId }, 'Error closing MCP client')
+          }
+        })(),
+      )
+    }
+
+    // Kill all MCP processes
+    for (const [mcpId, proc] of this.mcpProcesses.entries()) {
+      cleanupPromises.push(
+        (async () => {
+          try {
+            proc.kill()
+            // Wait for process to exit
+            await new Promise<void>((resolve) => {
+              proc.on('exit', () => resolve())
+              setTimeout(() => {
+                if (!proc.killed) {
+                  proc.kill('SIGKILL')
+                }
+                resolve()
+              }, 1000)
+            })
+          } catch (error: any) {
+            logger.warn({ error, mcpId }, 'Error killing MCP process')
+          }
+        })(),
+      )
+    }
+
+    // Wait for all cleanup to complete (with timeout)
+    await Promise.race([
+      Promise.all(cleanupPromises),
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+    ])
+
+    // Clear all maps
+    this.mcpClients.clear()
+    this.mcpProcesses.clear()
+    this.instances.clear()
+    this.schemaCache.clear()
+
+    logger.info('WorkerManager shutdown complete')
   }
 }
