@@ -8,6 +8,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
 
+[![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=mcpguard&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIm1jcGd1YXJkIl19)
+
 ## 🛡️ How It Works: A Simple Example
 
 ```mermaid
@@ -115,16 +117,41 @@ console.log(`Sprint Summary: ${stats.completed}/${stats.total} completed, ${stat
 
 **Requires:** [Node.js 20+](https://nodejs.org/) installed
 
+### Installation Steps
+
+1. **Click the "Install MCP Server" button** above (or manually add to Cursor/Claude config):
+   ```json
+   {
+     "mcpServers": {
+       "mcpguard": {
+         "command": "npx",
+         "args": ["-y", "mcpguard"]
+       }
+     }
+   }
+   ```
+
+2. **Run install to guard existing MCPs:**
+   ```bash
+   npx mcpguard install
+   ```
+   This automatically:
+   - Detects your IDE config (Cursor or Claude Code)
+   - Disables all other MCPs (moves them to `_mcpguard_disabled`)
+   - Ensures mcpguard is active
+   - All MCPs are now only accessible through MCPGuard
+
+3. **Restart your IDE** for changes to take effect.
+
+4. **That's it!** MCPGuard will auto-discover and guard any new MCPs you add to your config.
+
+### Restoring Direct MCP Access
+
+If you want to restore direct MCP access:
 ```bash
-# Install dependencies
-npm install
-
-# Build the project
-npm run build
-
-# Start the interactive CLI
-npm run cli
+npx mcpguard restore
 ```
+Then restart your IDE.
 
 You'll see a prompt like this:
 
@@ -302,9 +329,11 @@ Configure your AI agent (Claude Desktop, Cursor IDE, etc.):
 ```
 
 **Available MCP Tools:**
-- `load_mcp_server` - Load an MCP server into an isolated Worker
-- `execute_code` - Execute TypeScript code in a sandboxed isolate
-- `list_available_mcps` - List all loaded MCP servers
+- `execute_code` - PRIMARY tool for interacting with MCPs. Auto-loads MCPs from IDE config if needed. Use this instead of calling MCP tools directly.
+- `search_mcp_tools` - Discover which MCPs are configured in your IDE. Shows all configured MCPs (except mcpguard) with their status and available tools.
+- `list_saved_mcp_configs` - List all MCP configurations in your IDE config with loaded status and tool counts.
+- `load_mcp_server` - Manually load an MCP server (usually not needed - execute_code auto-loads)
+- `list_available_mcps` - List all currently loaded MCP servers
 - `get_mcp_schema` - Get TypeScript API definition for a loaded MCP
 - `unload_mcp_server` - Unload an MCP server
 - `get_metrics` - Get performance metrics

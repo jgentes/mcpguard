@@ -10,6 +10,7 @@ import {
   type JSONSchemaProperty,
   LoadMCPRequestSchema,
   type MCPConfig,
+  type MCPInstance,
   type MCPTool,
 } from '../types/mcp.js'
 import { ConfigManager } from '../utils/config-manager.js'
@@ -55,7 +56,7 @@ export class MCPHandler {
           {
             name: 'load_mcp_server',
             description:
-              'Load an MCP server into a secure isolated Worker environment for code mode execution. Can use a saved configuration or load with a new configuration. Automatically saves the configuration unless auto_save is false.',
+              'Manually load an MCP server into a secure isolated Worker environment for code mode execution. Usually not needed - execute_code will auto-load MCPs when needed. Use this if you need to pre-load an MCP or load with a custom configuration. Can use a saved configuration or load with a new configuration. Automatically saves the configuration unless auto_save is false.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -107,7 +108,7 @@ export class MCPHandler {
           },
           {
             name: 'execute_code',
-            description: `Execute TypeScript code in a sandboxed Worker isolate with access to a loaded MCP server.
+            description: `PRIMARY tool for interacting with MCPs. Auto-loads MCPs from IDE config if needed. Use this instead of calling MCP tools directly. All MCP operations should go through this tool for secure isolation and efficiency.
 
 The executed code receives two parameters:
 1. 'mcp' - An object containing all available MCP tools as async functions
@@ -121,7 +122,7 @@ Usage pattern:
 
 Example:
 \`\`\`typescript
-// Search for repositories
+// Search for repositories (MCP auto-loads if not already loaded)
 const repos = await mcp.search_repositories({ query: 'typescript', page: 1 });
 console.log('Found repositories:', JSON.stringify(repos, null, 2));
 
@@ -137,14 +138,21 @@ console.log('Created issue:', JSON.stringify(issue, null, 2));
 
 The 'mcp' object is automatically generated from the MCP's tool schema. Each tool is an async function that takes an input object matching the tool's inputSchema and returns a Promise with the tool's result.
 
-Use console.log() to output results - all console output is captured and returned in the response.`,
+Use console.log() to output results - all console output is captured and returned in the response.
+
+IMPORTANT: Provide either mcp_name (to auto-load from IDE config) or mcp_id (if already loaded). Using mcp_name is recommended as it automatically loads the MCP when needed.`,
             inputSchema: {
               type: 'object',
               properties: {
                 mcp_id: {
                   type: 'string',
                   description:
-                    'UUID of the loaded MCP server (returned from load_mcp_server). Use list_available_mcps or get_mcp_by_name to find the MCP ID.',
+                    'UUID of the loaded MCP server (returned from load_mcp_server). Use if MCP is already loaded. Otherwise, use mcp_name to auto-load.',
+                },
+                mcp_name: {
+                  type: 'string',
+                  description:
+                    'Name of the MCP server from IDE config (e.g., "github", "filesystem"). Auto-loads the MCP if not already loaded. Use search_mcp_tools to discover available MCPs.',
                 },
                 code: {
                   type: 'string',
@@ -166,13 +174,13 @@ The code runs in an isolated Worker environment with no network access. All MCP 
                   default: 30000,
                 },
               },
-              required: ['mcp_id', 'code'],
+              required: ['code'],
             },
           },
           {
             name: 'list_available_mcps',
             description:
-              'List all MCP servers currently loaded in Worker isolates. Returns a list with MCP IDs, names, status, and tool counts. Use get_mcp_by_name to find a specific MCP by name.',
+              'List all MCP servers currently loaded in Worker isolates. Returns a list with MCP IDs, names, status, and tool counts. Use get_mcp_by_name to find a specific MCP by name. Note: MCPs are auto-loaded when execute_code is called with mcp_name, so this shows actively loaded MCPs.',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -317,6 +325,28 @@ The code runs in an isolated Worker environment with no network access. All MCP 
               },
             },
           },
+          {
+            name: 'search_mcp_tools',
+            description:
+              'Search and discover MCP servers configured in your IDE. Returns all configured MCPs (except mcpguard) with their status and available tools. Use this to find which MCPs are available before calling execute_code. Implements the search_tools pattern for progressive disclosure - discover tools on-demand rather than loading all definitions upfront.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: {
+                  type: 'string',
+                  description:
+                    'Optional search term to filter by MCP name or tool name. If not provided, returns all configured MCPs.',
+                },
+                detail_level: {
+                  type: 'string',
+                  enum: ['summary', 'tools', 'full'],
+                  description:
+                    'Level of detail to return. summary: just MCP names and status. tools: includes tool names. full: includes full tool schemas (only for loaded MCPs). Default: summary',
+                  default: 'summary',
+                },
+              },
+            },
+          },
         ],
       }
     })
@@ -361,6 +391,9 @@ The code runs in an isolated Worker environment with no network access. All MCP 
 
           case 'import_cursor_mcps':
             return await this.handleImportCursorConfigs(args)
+
+          case 'search_mcp_tools':
+            return await this.handleSearchMCPTools(args)
 
           default:
             throw new MCPIsolateError(
@@ -467,6 +500,15 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           404,
         )
       }
+      // Note: URL-based MCPs (like GitHub Copilot) cannot be loaded via Worker isolates
+      // They are remote HTTP endpoints and don't support local execution
+      if ('url' in savedConfig) {
+        throw new MCPIsolateError(
+          `MCP "${mcp_name}" is a remote URL-based MCP and cannot be loaded into a Worker isolate. URL-based MCPs are accessed directly by the IDE.`,
+          'UNSUPPORTED_CONFIG',
+          400,
+        )
+      }
       configToUse = savedConfig
     } else {
       // Validate and use provided config
@@ -571,29 +613,98 @@ The code runs in an isolated Worker environment with no network access. All MCP 
       )
     }
 
-    // Check if MCP exists
-    const instance = this.workerManager.getInstance(validated.mcp_id)
-    if (!instance) {
+    // Handle auto-loading if mcp_name is provided
+    let mcpId: string
+    let instance = this.workerManager.getInstance(validated.mcp_id || '')
+
+    if (validated.mcp_name) {
+      // Check if MCP is already loaded
+      const existingInstance = this.workerManager.getMCPByName(
+        validated.mcp_name,
+      )
+
+      if (existingInstance) {
+        mcpId = existingInstance.mcp_id
+        instance = existingInstance
+      } else {
+        // Auto-load MCP from saved config
+        const savedConfig = this.configManager.getSavedConfig(validated.mcp_name)
+        if (!savedConfig) {
+          throw new MCPIsolateError(
+            `MCP "${validated.mcp_name}" not found in IDE configuration. Use search_mcp_tools to see available MCPs.`,
+            'NOT_FOUND',
+            404,
+            {
+              mcp_name: validated.mcp_name,
+              suggestion:
+                'Use search_mcp_tools to discover configured MCPs, or use load_mcp_server to load a new MCP.',
+            },
+          )
+        }
+
+        // Resolve environment variables
+        const resolvedConfig = this.configManager.resolveEnvVarsInObject(
+          savedConfig,
+        ) as MCPConfig
+
+        logger.info(
+          { mcp_name: validated.mcp_name },
+          'Auto-loading MCP for execute_code',
+        )
+
+        // Load the MCP
+        const startTime = Date.now()
+        const loadedInstance = await this.workerManager.loadMCP(
+          validated.mcp_name,
+          resolvedConfig,
+        )
+        const loadTime = Date.now() - startTime
+
+        this.metricsCollector.recordMCPLoad(loadedInstance.mcp_id, loadTime)
+
+        mcpId = loadedInstance.mcp_id
+        instance = loadedInstance
+
+        logger.info(
+          {
+            mcp_name: validated.mcp_name,
+            mcp_id: mcpId,
+            load_time_ms: loadTime,
+          },
+          'MCP auto-loaded successfully',
+        )
+      }
+    } else if (validated.mcp_id) {
+      mcpId = validated.mcp_id
+      instance = this.workerManager.getInstance(mcpId)
+      if (!instance) {
+        throw new MCPIsolateError(
+          `MCP instance not found: ${mcpId}`,
+          'NOT_FOUND',
+          404,
+          {
+            mcp_id: mcpId,
+            suggestion:
+              'Use list_available_mcps or get_mcp_by_name to find the correct MCP ID, or use mcp_name instead to auto-load.',
+          },
+        )
+      }
+    } else {
       throw new MCPIsolateError(
-        `MCP instance not found: ${validated.mcp_id}`,
-        'NOT_FOUND',
-        404,
-        {
-          mcp_id: validated.mcp_id,
-          suggestion:
-            'Use list_available_mcps or get_mcp_by_name to find the correct MCP ID',
-        },
+        'Either mcp_id or mcp_name must be provided',
+        'INVALID_INPUT',
+        400,
       )
     }
 
     const result = await this.workerManager.executeCode(
-      validated.mcp_id,
+      mcpId,
       validated.code,
       validated.timeout_ms ?? 30000,
     )
 
     this.metricsCollector.recordExecution(
-      validated.mcp_id,
+      mcpId,
       result.execution_time_ms,
       result.success,
       result.metrics?.mcp_calls_made || 0,
@@ -614,7 +725,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
                   result.error,
                 ),
                 context: {
-                  mcp_id: validated.mcp_id,
+                  mcp_id: mcpId,
                   mcp_name: instance.mcp_name,
                   code_length: validated.code.length,
                   timeout_ms: validated.timeout_ms,
@@ -1003,12 +1114,28 @@ console.log(JSON.stringify(result, null, 2));`
 
   private async handleListSavedConfigs() {
     const savedConfigs = this.configManager.getSavedConfigs()
+    const loadedInstances = this.workerManager.listInstances()
 
-    const configs = Object.entries(savedConfigs).map(([name, entry]) => ({
-      mcp_name: name,
-      config: entry.config,
-      source: entry.source,
-    }))
+    // Create a map of loaded instances by name for quick lookup
+    const loadedMap = new Map<string, MCPInstance>()
+    for (const instance of loadedInstances) {
+      loadedMap.set(instance.mcp_name, instance)
+    }
+
+    const configs = Object.entries(savedConfigs).map(([name, entry]) => {
+      const loadedInstance = loadedMap.get(name)
+      return {
+        mcp_name: name,
+        config: entry.config,
+        source: entry.source,
+        status: loadedInstance ? 'loaded' : 'not_loaded',
+        tools_count: loadedInstance?.tools.length || 0,
+        mcp_id: loadedInstance?.mcp_id,
+      }
+    })
+
+    const loadedCount = configs.filter((c) => c.status === 'loaded').length
+    const notLoadedCount = configs.filter((c) => c.status === 'not_loaded').length
 
     return {
       content: [
@@ -1018,8 +1145,12 @@ console.log(JSON.stringify(result, null, 2));`
             {
               configs,
               total_count: configs.length,
+              loaded_count: loadedCount,
+              not_loaded_count: notLoadedCount,
               config_path: this.configManager.getCursorConfigPath(),
               config_source: this.configManager.getConfigSource(),
+              note:
+                'These MCPs are configured in your IDE. Use execute_code with mcp_name to auto-load and access them. Only mcpguard should be directly accessible - all other MCPs should be accessed through execute_code for secure isolation.',
             },
             null,
             2,
@@ -1175,6 +1306,123 @@ console.log(JSON.stringify(result, null, 2));`
               errors: result.errors,
               config_path: configPath,
               config_source: configSource,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    }
+  }
+
+  private async handleSearchMCPTools(args: unknown) {
+    const typedArgs =
+      args && typeof args === 'object'
+        ? (args as { query?: string; detail_level?: 'summary' | 'tools' | 'full' })
+        : {}
+    const { query, detail_level = 'summary' } = typedArgs
+
+    // Get all configured MCPs (excluding mcpguard, including disabled ones for transparency)
+    const guardedConfigs = this.configManager.getGuardedMCPConfigs()
+    const loadedInstances = this.workerManager.listInstances()
+    const disabledMCPs = this.configManager.getDisabledMCPs()
+    const configSource = this.configManager.getConfigSource()
+    const configPath = this.configManager.getCursorConfigPath()
+
+    // Build results
+    const results: Array<{
+      mcp_name: string
+      status: 'loaded' | 'not_loaded' | 'disabled'
+      config_source: 'cursor' | 'claude-code' | 'github-copilot'
+      tools_count?: number
+      tool_names?: string[]
+      tools?: MCPTool[]
+      mcp_id?: string
+    }> = []
+
+    for (const [mcpName, entry] of Object.entries(guardedConfigs)) {
+      // Apply search filter if provided
+      if (query) {
+        const queryLower = query.toLowerCase()
+        const nameMatches = mcpName.toLowerCase().includes(queryLower)
+
+        // Check if any loaded tools match
+        const loadedInstance = loadedInstances.find(
+          (inst) => inst.mcp_name === mcpName,
+        )
+        const toolMatches =
+          loadedInstance?.tools.some((tool) =>
+            tool.name.toLowerCase().includes(queryLower),
+          ) || false
+
+        if (!nameMatches && !toolMatches) {
+          continue
+        }
+      }
+
+      const loadedInstance = loadedInstances.find(
+        (inst) => inst.mcp_name === mcpName,
+      )
+      const isDisabled = disabledMCPs.includes(mcpName)
+
+      const result: {
+        mcp_name: string
+        status: 'loaded' | 'not_loaded' | 'disabled'
+        config_source: 'cursor' | 'claude-code' | 'github-copilot'
+        tools_count?: number
+        tool_names?: string[]
+        tools?: MCPTool[]
+        mcp_id?: string
+      } = {
+        mcp_name: mcpName,
+        status: loadedInstance
+          ? 'loaded'
+          : isDisabled
+            ? 'disabled'
+            : 'not_loaded',
+        config_source: entry.source,
+      }
+
+      if (loadedInstance) {
+        result.mcp_id = loadedInstance.mcp_id
+        result.tools_count = loadedInstance.tools.length
+
+        if (detail_level === 'tools' || detail_level === 'full') {
+          result.tool_names = loadedInstance.tools.map((t) => t.name)
+        }
+
+        if (detail_level === 'full') {
+          result.tools = loadedInstance.tools
+        }
+      } else {
+        result.tools_count = 0
+        if (detail_level === 'tools' || detail_level === 'full') {
+          result.tool_names = []
+        }
+      }
+
+      results.push(result)
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              mcps: results,
+              total_count: results.length,
+              loaded_count: results.filter((r) => r.status === 'loaded').length,
+              not_loaded_count: results.filter(
+                (r) => r.status === 'not_loaded',
+              ).length,
+              disabled_count: results.filter(
+                (r) => r.status === 'disabled',
+              ).length,
+              config_path: configPath,
+              config_source: configSource,
+              note:
+                'These MCPs are configured in your IDE. Disabled MCPs are guarded by MCPGuard and should be accessed through execute_code. Use execute_code with mcp_name to auto-load and use these MCPs.',
             },
             null,
             2,

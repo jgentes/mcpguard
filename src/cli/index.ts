@@ -880,6 +880,11 @@ async function executeCode() {
 
     validateTypeScriptCode(validated.code)
 
+    // CLI always provides mcp_id, so it's safe to assert
+    if (!validated.mcp_id) {
+      throw new Error('mcp_id is required in CLI mode')
+    }
+
     console.log('\nExecuting code...\n')
     const result = await workerManager.executeCode(
       validated.mcp_id,
@@ -1254,9 +1259,142 @@ async function deleteSavedConfig() {
   }
 }
 
+async function setupMCPGuard() {
+  // Interactive version - show what will happen, then call non-interactive
+  try {
+    const configPath = configManager.getCursorConfigPath()
+
+    if (!configPath) {
+      console.log(
+        '\n❌ No IDE config file found. Please ensure Cursor or Claude Code is installed.',
+      )
+      return
+    }
+
+    // Read raw config to see all MCPs including disabled ones
+    const rawConfig = configManager.getRawConfig()
+    if (!rawConfig) {
+      console.log('\n❌ Failed to read config file.')
+      return
+    }
+
+    const allMCPs = Object.keys(rawConfig.mcpServers || {})
+    const disabledMCPs = Object.keys(rawConfig._mcpguard_disabled || {})
+    const mcpsToDisable = allMCPs.filter(
+      (name) => name.toLowerCase() !== 'mcpguard',
+    )
+
+    if (mcpsToDisable.length === 0 && disabledMCPs.length > 0) {
+      console.log('✅ All MCPs are already guarded.')
+      return
+    }
+
+    if (mcpsToDisable.length > 0) {
+      console.log(`\n📋 Found ${mcpsToDisable.length} MCP(s) to guard:`)
+      mcpsToDisable.forEach((name) => {
+        console.log(`   - ${name}`)
+      })
+
+      const confirmed = await question(
+        '\n⚠️  This will disable all MCPs except mcpguard in your IDE config.\n   They will be moved to _mcpguard_disabled section.\n   Continue? (y/N): ',
+      )
+
+      if (confirmed.trim().toLowerCase() !== 'y') {
+        console.log('Cancelled.')
+        return
+      }
+    }
+
+    // Execute the disable operation
+    const rawConfig2 = configManager.getRawConfig()
+    if (!rawConfig2) return
+
+    const allMCPs2 = Object.keys(rawConfig2.mcpServers || {})
+    const disabledMCPs2 = Object.keys(rawConfig2._mcpguard_disabled || {})
+    const mcpguardExists = allMCPs2.some(
+      (name) => name.toLowerCase() === 'mcpguard',
+    ) || disabledMCPs2.some((name) => name.toLowerCase() === 'mcpguard')
+
+    const mcpsToDisable2 = allMCPs2.filter(
+      (name) => name.toLowerCase() !== 'mcpguard',
+    )
+
+    if (mcpsToDisable2.length > 0) {
+      console.log('\n🔒 Disabling MCPs...')
+      const result = configManager.disableAllExceptMCPGuard()
+
+      console.log(`\n✅ Setup complete!`)
+      console.log(`   Disabled: ${result.disabled.join(', ') || 'none'}`)
+      if (result.alreadyDisabled.length > 0) {
+        console.log(
+          `   Already disabled: ${result.alreadyDisabled.join(', ')}`,
+        )
+      }
+      if (result.failed.length > 0) {
+        console.log(`   Failed: ${result.failed.join(', ')}`)
+      }
+    }
+
+    if (!mcpguardExists) {
+      console.log(
+        '\n⚠️  Note: mcpguard not found in config.',
+      )
+      console.log(
+        '   Please add mcpguard to your IDE config using the install button.',
+      )
+    }
+
+    console.log(
+      `\n💡 All MCPs are now guarded by MCPGuard. Restart your IDE for changes to take effect.`,
+    )
+  } catch (error: any) {
+    console.error('\n❌ Error during setup:', error.message)
+  }
+}
+
+async function restoreMCPs() {
+  // Interactive version - show what will happen, then call non-interactive
+  try {
+    const disabledMCPs = configManager.getDisabledMCPs()
+
+    if (disabledMCPs.length === 0) {
+      console.log('\n✅ No disabled MCPs found. Nothing to restore.')
+      return
+    }
+
+    console.log(`\n📋 Found ${disabledMCPs.length} disabled MCP(s):`)
+    disabledMCPs.forEach((name) => {
+      console.log(`   - ${name}`)
+    })
+
+    const confirmed = await question(
+      '\n⚠️  This will re-enable all disabled MCPs in your IDE config.\n   They will be accessible directly by the IDE again.\n   Continue? (y/N): ',
+    )
+
+    if (confirmed.trim().toLowerCase() !== 'y') {
+      console.log('Cancelled.')
+      return
+    }
+
+    console.log('\n🔄 Restoring MCPs...')
+    const restored = configManager.restoreAllDisabled()
+
+    if (restored.length > 0) {
+      console.log(`\n✅ Restored ${restored.length} MCP(s): ${restored.join(', ')}`)
+      console.log(`\n💡 Restart your IDE for changes to take effect.`)
+    } else {
+      console.log('\n❌ Failed to restore MCPs.')
+    }
+  } catch (error: any) {
+    console.error('\n❌ Error during restore:', error.message)
+  }
+}
+
 function showHelp() {
   console.log(`
 Available commands:
+  install       - Disable all MCPs except mcpguard (run this after adding MCPGuard to IDE config)
+  restore       - Re-enable all disabled MCPs
   load          - Load an MCP server (shows saved configs, auto-saves new ones)
   test          - Interactively test MCP tools (select tool, enter args, execute via Wrangler)
   test-direct   - Test MCP directly without Wrangler/Worker isolation (uses saved configs)
@@ -1282,6 +1420,12 @@ async function handleCommand(command: string) {
   const cmd = command.trim().toLowerCase()
 
   switch (cmd) {
+    case 'install':
+      await setupMCPGuard()
+      break
+    case 'restore':
+      await restoreMCPs()
+      break
     case 'load':
       await loadMCP()
       break
@@ -1336,6 +1480,20 @@ async function handleCommand(command: string) {
 }
 
 async function main() {
+  // Check for non-interactive commands (install, restore)
+  const command = process.argv[2]
+
+  if (command === 'install') {
+    await setupMCPGuardNonInteractive()
+    process.exit(0)
+  }
+
+  if (command === 'restore') {
+    await restoreMCPsNonInteractive()
+    process.exit(0)
+  }
+
+  // Interactive CLI mode
   const verbose =
     process.argv.includes('--verbose') || process.argv.includes('-v')
 
@@ -1361,6 +1519,124 @@ ${verbose ? '\n🔍 Verbose logging enabled. Use --quiet to disable.\n' : '\n�
     }
     process.exit(0)
   })
+}
+
+async function setupMCPGuardNonInteractive() {
+  try {
+    const sourceName = configManager.getConfigSourceDisplayName()
+    const configPath = configManager.getCursorConfigPath()
+
+    if (!configPath) {
+      console.error(
+        '\n❌ No IDE config file found. Please ensure Cursor or Claude Code is installed.',
+      )
+      process.exit(1)
+    }
+
+    console.log(`\n🔧 Setting up MCPGuard in ${sourceName}...`)
+    console.log(`   Config file: ${configPath}\n`)
+
+    // Read raw config to see all MCPs including disabled ones
+    const rawConfig = configManager.getRawConfig()
+    if (!rawConfig) {
+      console.error('\n❌ Failed to read config file.')
+      process.exit(1)
+    }
+
+    // Get all MCPs (including disabled)
+    const allMCPs = Object.keys(rawConfig.mcpServers || {})
+    const disabledMCPs = Object.keys(rawConfig._mcpguard_disabled || {})
+    const mcpguardExists = allMCPs.some(
+      (name) => name.toLowerCase() === 'mcpguard',
+    ) || disabledMCPs.some((name) => name.toLowerCase() === 'mcpguard')
+
+    // MCPs to disable (all except mcpguard)
+    const mcpsToDisable = allMCPs.filter(
+      (name) => name.toLowerCase() !== 'mcpguard',
+    )
+
+    if (mcpsToDisable.length === 0 && disabledMCPs.length > 0) {
+      console.log('✅ All MCPs are already guarded.')
+      if (!mcpguardExists) {
+        console.log('⚠️  Warning: mcpguard not found in config.')
+        console.log('   Please add mcpguard to your IDE config using the install button.')
+      }
+      process.exit(0)
+    }
+
+    if (mcpsToDisable.length > 0) {
+      console.log(`📋 Found ${mcpsToDisable.length} MCP(s) to guard:`)
+      mcpsToDisable.forEach((name) => {
+        console.log(`   - ${name}`)
+      })
+
+      console.log('\n🔒 Disabling MCPs...')
+      const result = configManager.disableAllExceptMCPGuard()
+
+      console.log(`\n✅ Setup complete!`)
+      console.log(`   Disabled: ${result.disabled.join(', ') || 'none'}`)
+      if (result.alreadyDisabled.length > 0) {
+        console.log(
+          `   Already disabled: ${result.alreadyDisabled.join(', ')}`,
+        )
+      }
+      if (result.failed.length > 0) {
+        console.log(`   Failed: ${result.failed.join(', ')}`)
+        process.exit(1)
+      }
+    }
+
+    if (!mcpguardExists) {
+      console.log(
+        '\n⚠️  Note: mcpguard not found in config.',
+      )
+      console.log(
+        '   Please add mcpguard to your IDE config using the install button in Cursor/Claude.',
+      )
+    } else {
+      console.log('\n✅ MCPGuard is configured.')
+    }
+
+    console.log(
+      `\n💡 All MCPs are now guarded by MCPGuard. Restart your IDE for changes to take effect.`,
+    )
+    console.log(
+      `   Use "npx mcpguard restore" to re-enable MCPs if needed.`,
+    )
+  } catch (error: any) {
+    console.error('\n❌ Error during setup:', error.message)
+    process.exit(1)
+  }
+}
+
+async function restoreMCPsNonInteractive() {
+  try {
+    const disabledMCPs = configManager.getDisabledMCPs()
+
+    if (disabledMCPs.length === 0) {
+      console.log('\n✅ No disabled MCPs found. Nothing to restore.')
+      process.exit(0)
+    }
+
+    console.log(`\n📋 Found ${disabledMCPs.length} disabled MCP(s):`)
+    disabledMCPs.forEach((name) => {
+      console.log(`   - ${name}`)
+    })
+
+    console.log('\n🔄 Restoring MCPs...')
+    const restored = configManager.restoreAllDisabled()
+
+    if (restored.length > 0) {
+      console.log(`\n✅ Restored ${restored.length} MCP(s): ${restored.join(', ')}`)
+      console.log(`\n💡 Restart your IDE for changes to take effect.`)
+    } else {
+      console.log('\n❌ Failed to restore MCPs.')
+      process.exit(1)
+    }
+  } catch (error: any) {
+    console.error('\n❌ Error during restore:', error.message)
+    process.exit(1)
+  }
 }
 
 main().catch((error) => {

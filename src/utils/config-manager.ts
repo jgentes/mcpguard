@@ -7,9 +7,16 @@ import logger from './logger.js'
 
 /**
  * Standard MCP configuration file format (matches Cursor/Claude Desktop format)
+ * MCP configs can be either command-based (command/args) or url-based (url/headers)
  */
 export interface MCPServersConfig {
-  mcpServers: Record<string, MCPConfig>
+  mcpServers: Record<string, unknown> // Use unknown to allow both command-based and url-based configs
+  // MCPGuard metadata: stores disabled MCPs that should be guarded
+  _mcpguard_disabled?: Record<string, unknown>
+  _mcpguard_metadata?: {
+    version?: string
+    disabled_at?: string
+  }
 }
 
 /**
@@ -399,6 +406,53 @@ export class ConfigManager {
         config.mcpServers = {}
       }
 
+      // Filter out disabled MCPs from active config (they're stored in _mcpguard_disabled)
+      // This ensures disabled MCPs don't appear in getSavedConfigs()
+      const activeConfig: MCPServersConfig = {
+        mcpServers: {},
+        _mcpguard_disabled: config._mcpguard_disabled,
+        _mcpguard_metadata: config._mcpguard_metadata,
+      }
+
+      // Only include MCPs that are not disabled
+      for (const [name, mcpConfig] of Object.entries(config.mcpServers)) {
+        // Skip if this MCP is in the disabled list
+        if (config._mcpguard_disabled?.[name]) {
+          continue
+        }
+        activeConfig.mcpServers[name] = mcpConfig
+      }
+
+      return activeConfig
+    } catch (error: unknown) {
+      logger.error({ error, filePath }, 'Failed to read config file')
+      return null
+    }
+  }
+
+  /**
+   * Read raw config file without filtering disabled MCPs
+   * Used internally for disable/enable operations
+   */
+  private readRawConfigFile(filePath: string): MCPServersConfig | null {
+    if (!existsSync(filePath)) {
+      return null
+    }
+
+    try {
+      const content = readFileSync(filePath, 'utf-8')
+      const config = parseJSONC(content) as MCPServersConfig
+
+      if (!config || typeof config !== 'object') {
+        logger.warn({ filePath }, 'Invalid config file format')
+        return null
+      }
+
+      // Ensure mcpServers exists
+      if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+        config.mcpServers = {}
+      }
+
       return config
     } catch (error: unknown) {
       logger.error({ error, filePath }, 'Failed to read config file')
@@ -430,6 +484,8 @@ export class ConfigManager {
 
   /**
    * Get all saved MCP configurations from the detected config file
+   * Excludes disabled MCPs (they're stored in _mcpguard_disabled)
+   * Returns configs as-is (supports both command-based and url-based)
    */
   getSavedConfigs(): Record<
     string,
@@ -444,10 +500,15 @@ export class ConfigManager {
       return configs
     }
 
+    // readConfigFile already filters out disabled MCPs
     const fileConfig = this.readConfigFile(this.configPath)
     if (fileConfig) {
       for (const [name, config] of Object.entries(fileConfig.mcpServers)) {
-        configs[name] = { config, source: this.configSource }
+        // Cast to MCPConfig (supports both command-based and url-based)
+        configs[name] = {
+          config: config as MCPConfig,
+          source: this.configSource,
+        }
       }
     }
 
@@ -456,6 +517,7 @@ export class ConfigManager {
 
   /**
    * Get a saved MCP configuration by name
+   * Returns config as-is (supports both command-based and url-based)
    */
   getSavedConfig(mcpName: string): MCPConfig | null {
     const saved = this.getSavedConfigs()
@@ -638,5 +700,286 @@ export class ConfigManager {
     }
     const ide = this.ideDefinitions.find((d) => d.id === this.configSource)
     return ide ? ide.displayName : 'IDE'
+  }
+
+  /**
+   * Get all MCP configurations excluding mcpguard itself
+   * Used for discovery and transparency - shows what MCPs are configured
+   * (including disabled ones) but should be accessed through MCPGuard
+   */
+  getGuardedMCPConfigs(): Record<
+    string,
+    { config: MCPConfig; source: 'cursor' | 'claude-code' | 'github-copilot' }
+  > {
+    const guardedConfigs: Record<
+      string,
+      { config: MCPConfig; source: 'cursor' | 'claude-code' | 'github-copilot' }
+    > = {}
+
+    if (!this.configPath || !this.configSource) {
+      return guardedConfigs
+    }
+
+    // Read raw config to include disabled MCPs for transparency
+    const rawConfig = this.readRawConfigFile(this.configPath)
+    if (!rawConfig) {
+      return guardedConfigs
+    }
+
+    // Include active MCPs (except mcpguard)
+    for (const [name, config] of Object.entries(rawConfig.mcpServers || {})) {
+      if (name.toLowerCase() !== 'mcpguard' && config) {
+        // Cast to MCPConfig (supports both command-based and url-based)
+        guardedConfigs[name] = {
+          config: config as MCPConfig,
+          source: this.configSource,
+        }
+      }
+    }
+
+    // Include disabled MCPs (except mcpguard) for transparency
+    for (const [name, config] of Object.entries(
+      rawConfig._mcpguard_disabled || {},
+    )) {
+      if (name.toLowerCase() !== 'mcpguard' && config) {
+        // Cast to MCPConfig (supports both command-based and url-based)
+        guardedConfigs[name] = {
+          config: config as MCPConfig,
+          source: this.configSource,
+        }
+      }
+    }
+
+    return guardedConfigs
+  }
+
+  /**
+   * Disable an MCP server by moving it to the disabled section
+   * This prevents the IDE from loading it directly, ensuring MCPGuard is used instead
+   * @param mcpName Name of the MCP server to disable
+   * @returns true if the MCP was disabled, false if it wasn't found or already disabled
+   */
+  disableMCP(mcpName: string): boolean {
+    if (!this.configPath) {
+      logger.warn('No config file found, cannot disable MCP')
+      return false
+    }
+
+    // Read raw config (including disabled MCPs)
+    const rawConfig = this.readRawConfigFile(this.configPath)
+    if (!rawConfig) {
+      return false
+    }
+
+    // Check if MCP exists and is not already disabled
+    if (!rawConfig.mcpServers[mcpName]) {
+      // Check if it's already disabled
+      if (rawConfig._mcpguard_disabled?.[mcpName]) {
+        logger.info({ mcpName }, 'MCP is already disabled')
+        return false
+      }
+      logger.warn({ mcpName }, 'MCP not found in config')
+      return false
+    }
+
+    // Move MCP to disabled section
+    const mcpConfig = rawConfig.mcpServers[mcpName]
+    delete rawConfig.mcpServers[mcpName]
+
+    // Initialize disabled section if needed
+    if (!rawConfig._mcpguard_disabled) {
+      rawConfig._mcpguard_disabled = {}
+    }
+    rawConfig._mcpguard_disabled[mcpName] = mcpConfig
+
+    // Initialize metadata if needed
+    if (!rawConfig._mcpguard_metadata) {
+      rawConfig._mcpguard_metadata = {}
+    }
+    rawConfig._mcpguard_metadata.disabled_at = new Date().toISOString()
+
+    this.writeConfigFile(this.configPath, rawConfig)
+
+    const ide = this.ideDefinitions.find((d) => d.id === this.configSource)
+    const sourceName = ide ? ide.displayName : 'IDE'
+    logger.info(
+      { mcpName, configPath: this.configPath, source: this.configSource },
+      `MCP disabled in ${sourceName} config file (moved to _mcpguard_disabled)`,
+    )
+
+    return true
+  }
+
+  /**
+   * Enable a previously disabled MCP server by moving it back to active config
+   * @param mcpName Name of the MCP server to enable
+   * @returns true if the MCP was enabled, false if it wasn't found in disabled list
+   */
+  enableMCP(mcpName: string): boolean {
+    if (!this.configPath) {
+      logger.warn('No config file found, cannot enable MCP')
+      return false
+    }
+
+    // Read raw config (including disabled MCPs)
+    const rawConfig = this.readRawConfigFile(this.configPath)
+    if (!rawConfig) {
+      return false
+    }
+
+    // Check if MCP is in disabled list
+    if (!rawConfig._mcpguard_disabled?.[mcpName]) {
+      logger.warn({ mcpName }, 'MCP not found in disabled list')
+      return false
+    }
+
+    // Move MCP back to active config
+    const mcpConfig = rawConfig._mcpguard_disabled[mcpName]
+    delete rawConfig._mcpguard_disabled[mcpName]
+
+    // Ensure mcpServers exists
+    if (!rawConfig.mcpServers) {
+      rawConfig.mcpServers = {}
+    }
+    rawConfig.mcpServers[mcpName] = mcpConfig
+
+    // Clean up disabled section if empty
+    if (
+      rawConfig._mcpguard_disabled &&
+      Object.keys(rawConfig._mcpguard_disabled).length === 0
+    ) {
+      delete rawConfig._mcpguard_disabled
+    }
+
+    this.writeConfigFile(this.configPath, rawConfig)
+
+    const ide = this.ideDefinitions.find((d) => d.id === this.configSource)
+    const sourceName = ide ? ide.displayName : 'IDE'
+    logger.info(
+      { mcpName, configPath: this.configPath, source: this.configSource },
+      `MCP enabled in ${sourceName} config file (moved from _mcpguard_disabled)`,
+    )
+
+    return true
+  }
+
+  /**
+   * Disable all MCPs except mcpguard
+   * Used during setup to ensure only MCPGuard is accessible
+   * Also ensures mcpguard is in the config (if it exists in disabled, moves it to active)
+   * @returns Object with results
+   */
+  disableAllExceptMCPGuard(): {
+    disabled: string[]
+    failed: string[]
+    alreadyDisabled: string[]
+    mcpguardRestored: boolean
+  } {
+    const result = {
+      disabled: [] as string[],
+      failed: [] as string[],
+      alreadyDisabled: [] as string[],
+      mcpguardRestored: false,
+    }
+
+    if (!this.configPath) {
+      return result
+    }
+
+    // Read raw config to see all MCPs
+    const rawConfig = this.readRawConfigFile(this.configPath)
+    if (!rawConfig || !rawConfig.mcpServers) {
+      return result
+    }
+
+    // If mcpguard is disabled, restore it first (but don't count it in results)
+    if (rawConfig._mcpguard_disabled?.['mcpguard']) {
+      this.enableMCP('mcpguard')
+      result.mcpguardRestored = true
+    }
+
+    // Disable all MCPs except mcpguard
+    for (const [mcpName] of Object.entries(rawConfig.mcpServers)) {
+      if (mcpName.toLowerCase() === 'mcpguard') {
+        continue // Skip mcpguard
+      }
+
+      // Check if already disabled
+      if (rawConfig._mcpguard_disabled?.[mcpName]) {
+        result.alreadyDisabled.push(mcpName)
+      } else if (this.disableMCP(mcpName)) {
+        result.disabled.push(mcpName)
+      } else {
+        result.failed.push(mcpName)
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Restore all disabled MCPs back to active config
+   * @returns Array of restored MCP names
+   */
+  restoreAllDisabled(): string[] {
+    const restored: string[] = []
+
+    if (!this.configPath) {
+      return restored
+    }
+
+    // Read raw config
+    const rawConfig = this.readRawConfigFile(this.configPath)
+    if (!rawConfig || !rawConfig._mcpguard_disabled) {
+      return restored
+    }
+
+    // Restore all disabled MCPs
+    for (const [mcpName] of Object.entries(rawConfig._mcpguard_disabled)) {
+      if (this.enableMCP(mcpName)) {
+        restored.push(mcpName)
+      }
+    }
+
+    return restored
+  }
+
+  /**
+   * Get list of disabled MCPs
+   * @returns Array of disabled MCP names
+   */
+  getDisabledMCPs(): string[] {
+    if (!this.configPath) {
+      return []
+    }
+
+    // Read raw config to see disabled MCPs
+    const rawConfig = this.readConfigFile(this.configPath)
+    if (!rawConfig || !rawConfig._mcpguard_disabled) {
+      return []
+    }
+
+    return Object.keys(rawConfig._mcpguard_disabled)
+  }
+
+  /**
+   * Check if an MCP is disabled
+   * @param mcpName Name of the MCP server to check
+   * @returns true if the MCP is disabled
+   */
+  isMCPDisabled(mcpName: string): boolean {
+    return this.getDisabledMCPs().includes(mcpName)
+  }
+
+  /**
+   * Get the raw config file content (including disabled MCPs)
+   * Useful for inspection or backup purposes
+   */
+  getRawConfig(): MCPServersConfig | null {
+    if (!this.configPath) {
+      return null
+    }
+
+    return this.readRawConfigFile(this.configPath)
   }
 }
