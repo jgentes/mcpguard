@@ -131,10 +131,6 @@ export class WorkerManager {
         const address = this.rpcServer?.address()
         if (address && typeof address === 'object') {
           this.rpcPort = address.port
-          logger.info(
-            { port: this.rpcPort },
-            'MCP RPC bridge server started (bridges Cloudflare Workers to Node.js MCP clients)',
-          )
         }
         resolve()
       })
@@ -1381,13 +1377,13 @@ ${mcpBindingStubs}
    * Called during graceful shutdown
    */
   async shutdown(): Promise<void> {
-    logger.info('Shutting down WorkerManager...')
+    logger.debug('Shutting down WorkerManager...')
 
     // Close RPC server
     if (this.rpcServer) {
       await new Promise<void>((resolve) => {
         this.rpcServer?.close(() => {
-          logger.info('RPC server closed')
+          logger.debug('RPC server closed')
           resolve()
         })
         // Force close after 2 seconds
@@ -1450,6 +1446,6 @@ ${mcpBindingStubs}
     this.instances.clear()
     this.schemaCache.clear()
 
-    logger.info('WorkerManager shutdown complete')
+    logger.debug('WorkerManager shutdown complete')
   }
 }
