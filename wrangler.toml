@@ -1,10 +1,6 @@
 name = "mcpguard"
-main = "src/worker/runtime.ts"
 compatibility_date = "2025-06-01"
 compatibility_flags = ["enable_ctx_exports"]
-
-[env.development]
-workers_dev = true
 
 [[worker_loaders]]
 binding = "LOADER"

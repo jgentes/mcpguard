@@ -5,6 +5,10 @@ import {
   spawn,
 } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { join, resolve } from 'node:path'
 import {
   createServer,
   type Server as HttpServer,
@@ -12,15 +16,22 @@ import {
   type ServerResponse,
 } from 'node:http'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type {
+  ExecutionResult,
   JSONSchemaProperty,
   MCPConfig,
   MCPInstance,
   MCPTool,
 } from '../types/mcp.js'
+import { isCommandBasedConfig } from '../types/mcp.js'
 import type { WorkerCode } from '../types/worker.js'
-import { MCPConnectionError, WorkerError } from '../utils/errors.js'
+import {
+  MCPConnectionError,
+  MCPIsolateError,
+  WorkerError,
+} from '../utils/errors.js'
 import logger from '../utils/logger.js'
 import { ProgressIndicator } from '../utils/progress-indicator.js'
 import { formatWranglerError } from '../utils/wrangler-formatter.js'
@@ -34,38 +45,6 @@ interface CachedMCPSchema {
   typescriptApi: string
   configHash: string // Hash of the config to detect changes
   cachedAt: Date
-}
-
-/**
- * Execution result from Worker isolate
- */
-interface ExecutionResult {
-  success: boolean
-  output?: string
-  result?: unknown
-  error?: string
-  execution_time_ms: number
-  metrics?: {
-    mcp_calls_made?: number
-    tools_called?: string[]
-    schema_efficiency?: {
-      total_tools_available: number
-      tools_used: string[]
-      schema_size_total_chars: number
-      schema_size_used_chars: number
-      schema_utilization_percent: number
-      schema_efficiency_ratio: number
-      estimated_tokens_saved?: number
-    }
-    security?: {
-      network_isolation_enabled: boolean
-      process_isolation_enabled: boolean
-      isolation_type: string
-      sandbox_status: string
-      security_level: string
-      protection_summary?: string[]
-    }
-  }
 }
 
 // Note: Client._transport is private, so we use type assertions through unknown
@@ -100,10 +79,53 @@ export class WorkerManager {
   private rpcServer: HttpServer | null = null
   private rpcPort: number = 0
   private rpcServerReady: Promise<void> | null = null
+  // Cached worker entry point (determined once at startup)
+  private cachedWorkerEntryPoint: string | null = null
+  // Project root directory (where wrangler.toml is) - cached
+  private projectRoot: string | null = null
 
   constructor() {
     this.schemaConverter = new SchemaConverter()
+    this.projectRoot = this.findProjectRoot()
     this.startRPCServer()
+  }
+
+  /**
+   * Find the project root by looking for wrangler.toml or package.json
+   * This ensures we always spawn Wrangler from the correct directory
+   * Starts from the directory where this file is located, not process.cwd()
+   */
+  private findProjectRoot(): string {
+    // Get the directory where this source file is located
+    // This works even when the MCP server is started from a different directory
+    const currentFile = fileURLToPath(import.meta.url)
+    let currentDir = dirname(currentFile)
+    
+    // Walk up from src/server/worker-manager.ts to find project root
+    // We need to go up 2 levels: src/server -> src -> project root
+    const maxDepth = 10 // Safety limit
+    let depth = 0
+    
+    while (depth < maxDepth) {
+      if (existsSync(join(currentDir, 'wrangler.toml')) || existsSync(join(currentDir, 'package.json'))) {
+        logger.debug({ projectRoot: currentDir, cwd: process.cwd(), sourceFile: currentFile }, 'Found project root')
+        return currentDir
+      }
+      
+      const parentDir = resolve(currentDir, '..')
+      if (parentDir === currentDir) {
+        break // Reached filesystem root
+      }
+      currentDir = parentDir
+      depth++
+    }
+    
+    // Fallback: try process.cwd() as last resort
+    logger.warn(
+      { cwd: process.cwd(), sourceFile: currentFile, searchedFrom: dirname(currentFile) },
+      'Could not find project root (wrangler.toml or package.json), using cwd as fallback',
+    )
+    return process.cwd()
   }
 
   /**
@@ -168,8 +190,38 @@ export class WorkerManager {
             arguments: input || {},
           })
 
+          // Extract the actual tool result from the MCP SDK response
+          // The MCP SDK returns a result with a content array, where each item has type and text/data
+          // We need to extract and parse the actual data
+          let toolResult: unknown = result
+          
+          // If result has content array, extract the first text content
+          if (result && typeof result === 'object' && 'content' in result) {
+            const content = (result as { content?: Array<{ type?: string; text?: string }> }).content
+            if (Array.isArray(content) && content.length > 0) {
+              const firstContent = content[0]
+              if (firstContent.type === 'text' && firstContent.text) {
+                try {
+                  // Try to parse as JSON if it looks like JSON
+                  const text = firstContent.text.trim()
+                  if (text.startsWith('{') || text.startsWith('[')) {
+                    toolResult = JSON.parse(text)
+                  } else {
+                    toolResult = text
+                  }
+                } catch {
+                  // If parsing fails, use the text as-is
+                  toolResult = firstContent.text
+                }
+              } else {
+                // Use the content item as-is if it's not text
+                toolResult = firstContent
+              }
+            }
+          }
+
           res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ success: true, result }))
+          res.end(JSON.stringify({ success: true, result: toolResult }))
         } catch (error: unknown) {
           const errorMessage =
             error instanceof Error ? error.message : 'Unknown error'
@@ -354,6 +406,129 @@ export class WorkerManager {
   }
 
   /**
+   * Load MCP tool schema only (without spawning full process)
+   * Used for transparent proxy mode to discover available tools
+   * Returns cached schema if available, otherwise fetches and caches it
+   */
+  async loadMCPSchemaOnly(
+    mcpName: string,
+    config: MCPConfig,
+  ): Promise<MCPTool[]> {
+    const cacheKey = this.getCacheKey(mcpName, config)
+    const configHash = this.hashConfig(mcpName, config)
+
+    // Check cache first
+    const cached = this.schemaCache.get(cacheKey)
+    if (cached && cached.configHash === configHash) {
+      logger.debug(
+        { mcpName, cacheKey, toolCount: cached.tools.length },
+        'Using cached MCP schema for transparent proxy',
+      )
+      return cached.tools
+    }
+
+    // Not cached - need to fetch schema
+    // Create temporary client to fetch schema
+    let client: Client | null = null
+    let transport: StdioClientTransport | StreamableHTTPClientTransport | null =
+      null
+
+    try {
+      if (isCommandBasedConfig(config)) {
+        transport = new StdioClientTransport({
+          command: config.command,
+          args: config.args || [],
+          env: config.env,
+        })
+      } else {
+        // URL-based MCP: use HTTP transport
+        const url = new URL(config.url)
+        const transportOptions: {
+          requestInit?: RequestInit
+        } = {}
+
+        // Add custom headers if provided
+        if (config.headers) {
+          transportOptions.requestInit = {
+            headers: config.headers,
+          }
+        }
+
+        transport = new StreamableHTTPClientTransport(url, transportOptions)
+      }
+
+      client = new Client(
+        {
+          name: 'mcpguard',
+          version: '0.1.0',
+        },
+        {
+          capabilities: {},
+        },
+      )
+
+      // Connect to fetch schema
+      await client.connect(transport, { timeout: 10000 })
+
+      // Fetch tools
+      const toolsResponse = await client.listTools()
+
+      // Convert to MCPTool format
+      const tools: MCPTool[] = toolsResponse.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: {
+          type: 'object' as const,
+          properties: (tool.inputSchema.properties || {}) as Record<
+            string,
+            JSONSchemaProperty
+          >,
+          required: tool.inputSchema.required || [],
+        },
+      }))
+
+      // Cache the schema
+      const typescriptApi = this.schemaConverter.convertToTypeScript(tools)
+      this.schemaCache.set(cacheKey, {
+        tools,
+        typescriptApi,
+        configHash,
+        cachedAt: new Date(),
+      })
+
+      logger.info(
+        { mcpName, cacheKey, toolCount: tools.length },
+        'Fetched and cached MCP schema for transparent proxy',
+      )
+
+      return tools
+    } catch (error: unknown) {
+      logger.warn(
+        { error, mcpName },
+        'Failed to fetch MCP schema for transparent proxy',
+      )
+      // Return empty array on error - transparent proxy will skip this MCP
+      return []
+    } finally {
+      // Clean up temporary client and transport
+      if (client) {
+        try {
+          await client.close()
+        } catch (error: unknown) {
+          logger.debug({ error }, 'Error closing temporary MCP client')
+        }
+      }
+      if (transport) {
+        try {
+          await transport.close()
+        } catch (error: unknown) {
+          logger.debug({ error }, 'Error closing temporary MCP transport')
+        }
+      }
+    }
+  }
+
+  /**
    * Load an MCP server into a Worker isolate
    */
   async loadMCP(mcpName: string, config: MCPConfig): Promise<MCPInstance> {
@@ -361,11 +536,13 @@ export class WorkerManager {
     const cacheKey = this.getCacheKey(mcpName, config)
 
     // Log config without sensitive environment variables
-    const safeConfig = {
-      command: config.command,
-      args: config.args,
-      envKeys: config.env ? Object.keys(config.env) : undefined,
-    }
+    const safeConfig = isCommandBasedConfig(config)
+      ? {
+          command: config.command,
+          args: config.args,
+          envKeys: config.env ? Object.keys(config.env) : undefined,
+        }
+      : { url: config.url }
     logger.info({ mcpId, mcpName, config: safeConfig }, 'Loading MCP server')
 
     try {
@@ -374,9 +551,9 @@ export class WorkerManager {
       const hasCachedSchema =
         cached && cached.configHash === this.hashConfig(mcpName, config)
 
-      // Step 2: If we have cached schema, we still need a process for execution
-      // For now, spawn it quickly (we'll refactor this later to reuse Client)
-      if (hasCachedSchema) {
+      // Step 2: If we have cached schema and it's a command-based MCP, we still need a process for execution
+      // URL-based MCPs don't spawn processes - they use HTTP connections
+      if (hasCachedSchema && isCommandBasedConfig(config)) {
         const mcpProcess = await this.startMCPProcess(config, true)
         this.mcpProcesses.set(mcpId, mcpProcess)
       }
@@ -510,9 +687,11 @@ export class WorkerManager {
       return {
         success: true,
         output: result.output,
+        result: result.result,
         execution_time_ms: executionTime,
         metrics: {
-          ...result.metrics,
+          mcp_calls_made: result.metrics?.mcp_calls_made ?? 0,
+          tools_called: result.metrics?.tools_called,
           schema_efficiency: schemaEfficiency,
           security,
         },
@@ -528,6 +707,31 @@ export class WorkerManager {
 
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error'
+
+      // Extract error details if it's an MCPIsolateError (includes WorkerError)
+      // WorkerError extends MCPIsolateError, so this should catch it
+      let errorDetails: unknown
+      if (error instanceof MCPIsolateError) {
+        errorDetails = error.details
+        logger.debug(
+          { mcpId, hasDetails: !!errorDetails },
+          'Extracted error details from MCPIsolateError',
+        )
+      } else if (error instanceof WorkerError) {
+        // Fallback check - WorkerError should be caught by MCPIsolateError check above
+        // but this ensures we get the details
+        errorDetails = error.details
+        logger.debug(
+          { mcpId, hasDetails: !!errorDetails },
+          'Extracted error details from WorkerError',
+        )
+      } else {
+        logger.debug(
+          { mcpId, errorType: error?.constructor?.name },
+          'Error is not an MCPIsolateError or WorkerError',
+        )
+      }
+
       return {
         success: false,
         error: errorMessage,
@@ -538,6 +742,7 @@ export class WorkerManager {
           schema_efficiency: schemaEfficiency,
           security,
         },
+        error_details: errorDetails,
       }
     }
   }
@@ -627,6 +832,14 @@ export class WorkerManager {
     config: MCPConfig,
     hasCachedSchema: boolean = false,
   ): Promise<ChildProcess> {
+    // Only command-based configs can spawn processes
+    // URL-based configs use HTTP transport and don't need process spawning
+    if (!isCommandBasedConfig(config)) {
+      throw new MCPConnectionError(
+        'URL-based MCP configurations use HTTP transport and do not spawn processes. Process tracking is only for command-based MCPs.',
+      )
+    }
+
     return new Promise((resolve, reject) => {
       // On Windows, npx resolves to npx.cmd which spawn() can execute directly
       // On Unix, npx is a regular executable
@@ -813,13 +1026,32 @@ export class WorkerManager {
     logger.info({ mcpId, mcpName }, 'Fetching MCP schema using real protocol')
 
     try {
-      // Create MCP client with stdio transport
-      // The transport will spawn the process and handle initialization
-      const transport = new StdioClientTransport({
-        command: config.command,
-        args: config.args || [],
-        env: config.env,
-      })
+      // Create MCP client with appropriate transport based on config type
+      let transport: StdioClientTransport | StreamableHTTPClientTransport
+
+      if (isCommandBasedConfig(config)) {
+        // Command-based MCP: use stdio transport (spawns process)
+        transport = new StdioClientTransport({
+          command: config.command,
+          args: config.args || [],
+          env: config.env,
+        })
+      } else {
+        // URL-based MCP: use HTTP transport (connects to remote endpoint)
+        const url = new URL(config.url)
+        const transportOptions: {
+          requestInit?: RequestInit
+        } = {}
+
+        // Add custom headers if provided
+        if (config.headers) {
+          transportOptions.requestInit = {
+            headers: config.headers,
+          }
+        }
+
+        transport = new StreamableHTTPClientTransport(url, transportOptions)
+      }
 
       const client = new Client(
         {
@@ -843,28 +1075,37 @@ export class WorkerManager {
       // Store client for later use (e.g., executing tools)
       this.mcpClients.set(mcpId, client)
 
-      // Get the actual process from the transport
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const transportWithProcess = transport as unknown as {
-        _process?: ChildProcess
-      }
-      const process = transportWithProcess._process
-      if (process) {
-        // Update our process map with the actual process
-        this.mcpProcesses.set(mcpId, process)
-
-        if (process.pid) {
-          logger.info(
-            {
-              pid: process.pid,
-              command: config.command,
-              args: (config.args || []).slice(0, 5),
-              mcpId,
-              mcpName,
-            },
-            `MCP process spawned via StdioClientTransport: PID ${process.pid}`,
-          )
+      // For command-based MCPs, track the spawned process
+      if (isCommandBasedConfig(config)) {
+        // Get the actual process from the transport
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const transportWithProcess = transport as unknown as {
+          _process?: ChildProcess
         }
+        const process = transportWithProcess._process
+        if (process) {
+          // Update our process map with the actual process
+          this.mcpProcesses.set(mcpId, process)
+
+          if (process.pid) {
+            logger.info(
+              {
+                pid: process.pid,
+                command: config.command,
+                args: (config.args || []).slice(0, 5),
+                mcpId,
+                mcpName,
+              },
+              `MCP process spawned via StdioClientTransport: PID ${process.pid}`,
+            )
+          }
+        }
+      } else {
+        // URL-based MCPs don't spawn processes - they use HTTP connections
+        logger.info(
+          { mcpId, mcpName, url: config.url },
+          'MCP connected via StreamableHTTPClientTransport',
+        )
       }
 
       // List tools from the MCP server
@@ -908,6 +1149,43 @@ export class WorkerManager {
     }
   }
 
+  /**
+   * Escape user code for safe embedding in template literals
+   * Handles backticks, ${} interpolation, backslashes, and other special characters
+   * Uses a multi-step approach to properly escape all template literal special characters
+   */
+  /**
+   * Escape user code for safe direct embedding as executable JavaScript code
+   * Since we're building a string using string concatenation, we need to escape
+   * characters that could break the string literal syntax
+   * 
+   * IMPORTANT: We're NOT wrapping the code in quotes - we're embedding it directly
+   * as executable code, so we only need to escape characters that break string
+   * concatenation (single quotes in string literals we're building)
+   */
+  private escapeUserCode(code: string): string {
+    // Since we're embedding code directly (not as a string literal), we don't need
+    // to escape most characters. However, we're building the worker script using
+    // single-quoted strings, so if the user code contains a single quote that's
+    // part of a string literal, it could break our string concatenation.
+    // 
+    // Actually wait - we're concatenating the code directly, not wrapping it in quotes.
+    // So we don't need to escape quotes. But we do need to ensure the code itself
+    // is valid JavaScript when embedded.
+    // 
+    // The real issue: if the code contains unclosed blocks, it will break the syntax.
+    // But we can't fix that - that's the user's responsibility.
+    // 
+    // However, we should NOT escape newlines - we want them preserved as actual newlines
+    // in the generated code, not as \n strings.
+    
+    // Actually, since we're using string concatenation with single quotes, and we're
+    // NOT wrapping the user code in quotes, we don't need to escape anything!
+    // The code is embedded directly as-is.
+    
+    return code
+  }
+
   private async generateWorkerCode(
     mcpId: string,
     tools: MCPTool[],
@@ -920,6 +1198,10 @@ export class WorkerManager {
     // Generate MCP binding stubs that use Service Binding instead of fetch()
     // The Service Binding (env.MCP) is provided by the parent Worker via ctx.exports
     // This allows dynamic workers to remain fully isolated (globalOutbound: null)
+    logger.debug(
+      { mcpId, toolCount: tools.length, toolNames: tools.map((t) => t.name) },
+      'Generating MCP binding stubs',
+    )
     const mcpBindingStubs = tools
       .map((tool) => {
         // Escape tool name for use in template string
@@ -931,6 +1213,11 @@ export class WorkerManager {
     }`
       })
       .join(',\n')
+    
+    logger.debug(
+      { mcpId, bindingStubsPreview: mcpBindingStubs.substring(0, 500) },
+      'Generated MCP binding stubs',
+    )
 
     // Dynamic Worker code that executes user code
     // This Worker is spawned via the Worker Loader API
@@ -939,111 +1226,129 @@ export class WorkerManager {
     // Type definitions are only needed for IDE/type checking, not at runtime.
     // Following Cloudflare's Code Mode pattern: https://blog.cloudflare.com/code-mode/
     // Uses Service Bindings for secure MCP access (no fetch() needed - true isolation)
-    const workerScript = `
-// Dynamic Worker that executes AI-generated code
-// This Worker is spawned via Worker Loader API from the parent Worker
-// Uses Service Bindings for secure MCP access (globalOutbound: null enabled)
-export default {
-  async fetch(request, env, ctx) {
-    const { code, timeout = 30000 } = await request.json();
-    
-    // Capture console output
-    const logs = [];
-    const originalLog = console.log;
-    const originalError = console.error;
-    const originalWarn = console.warn;
-
-    console.log = (...args) => {
-      logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
-    };
-
-    console.error = (...args) => {
-      logs.push('ERROR: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
-    };
-
-    console.warn = (...args) => {
-      logs.push('WARN: ' + args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
-    };
-
-    let mcpCallCount = 0;
-    const toolsCalled = new Set();
-    let result;
-
-    try {
-      // Create MCP binding implementation using Service Binding (env.MCP)
-      // The Service Binding is provided by the parent Worker and allows secure MCP access
-      // without requiring fetch() - enabling true network isolation (globalOutbound: null)
-      // Reference: https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/
-      const mcpBinding = {
-${mcpBindingStubs}
-      };
-
-      // Create MCP proxy to track calls and tool names
-      const mcp = new Proxy(mcpBinding, {
-        get(target, prop) {
-          const original = target[prop];
-          if (typeof original === 'function') {
-            return async (...args) => {
-              mcpCallCount++;
-              toolsCalled.add(String(prop));
-              return await original.apply(target, args);
-            };
-          }
-          return original;
-        },
-      });
-
-      // Execute the user-provided code
-      // The user code is embedded directly in this Worker module as executable statements
-      // Each execution gets a fresh Worker isolate via Worker Loader API
-      // Note: We can't use new Function() or eval() in Workers, so code must be embedded at generation time
-      const executeWithTimeout = async () => {
-        // User code is embedded below - it has access to 'mcp' and 'env'
-        // The code variable contains the user's code which will be executed directly
-        ${userCode.replace(/`/g, '\\`').replace(/\$/g, '\\$')}
-      };
-
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Execution timeout')), timeout)
-      );
-
-      result = await Promise.race([executeWithTimeout(), timeoutPromise]);
-
-      return new Response(JSON.stringify({
-        success: true,
-        output: logs.join('\\n'),
-        result: result !== undefined ? result : null,
-        metrics: {
-          mcp_calls_made: mcpCallCount,
-          tools_called: Array.from(toolsCalled),
-        },
-      }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    } catch (error) {
-      return new Response(JSON.stringify({
-        success: false,
-        error: error.message,
-        stack: error.stack,
-        output: logs.join('\\n'),
-        metrics: {
-          mcp_calls_made: mcpCallCount,
-          tools_called: Array.from(toolsCalled),
-        },
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    } finally {
-      // Restore console methods
-      console.log = originalLog;
-      console.error = originalError;
-      console.warn = originalWarn;
-    }
-  }
-};
-
-`
+    // Escape user code before embedding to prevent string syntax errors
+    const escapedUserCode = this.escapeUserCode(userCode)
+    // Log the escaped code for debugging (first 200 chars)
+    logger.debug(
+      { 
+        originalLength: userCode.length,
+        escapedLength: escapedUserCode.length,
+        preview: escapedUserCode.substring(0, 200),
+      },
+      'Escaped user code for embedding',
+    )
+    // Build worker script using string concatenation to avoid esbuild parsing issues
+    // We can't mix template literals with string concatenation, so we use all string concatenation
+    const workerScript = 
+'// Dynamic Worker that executes AI-generated code\n' +
+'// This Worker is spawned via Worker Loader API from the parent Worker\n' +
+'// Uses Service Bindings for secure MCP access (globalOutbound: null enabled)\n' +
+'export default {\n' +
+'  async fetch(request, env, ctx) {\n' +
+'    const { code, timeout = 30000 } = await request.json();\n' +
+'    \n' +
+'    // Capture console output\n' +
+'    const logs = [];\n' +
+'    const originalLog = console.log;\n' +
+'    const originalError = console.error;\n' +
+'    const originalWarn = console.warn;\n' +
+'\n' +
+'    console.log = (...args) => {\n' +
+'      logs.push(args.map(a => typeof a === \'object\' ? JSON.stringify(a) : String(a)).join(\' \'));\n' +
+'    };\n' +
+'\n' +
+'    console.error = (...args) => {\n' +
+'      logs.push(\'ERROR: \' + args.map(a => typeof a === \'object\' ? JSON.stringify(a) : String(a)).join(\' \'));\n' +
+'    };\n' +
+'\n' +
+'    console.warn = (...args) => {\n' +
+'      logs.push(\'WARN: \' + args.map(a => typeof a === \'object\' ? JSON.stringify(a) : String(a)).join(\' \'));\n' +
+'    };\n' +
+'\n' +
+'    let mcpCallCount = 0;\n' +
+'    const toolsCalled = new Set();\n' +
+'    let result;\n' +
+'\n' +
+'    try {\n' +
+'      // Create MCP binding implementation using Service Binding (env.MCP)\n' +
+'      // The Service Binding is provided by the parent Worker and allows secure MCP access\n' +
+'      // without requiring fetch() - enabling true network isolation (globalOutbound: null)\n' +
+'      // Reference: https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/\n' +
+'      const mcpBinding = {\n' +
+mcpBindingStubs + '\n' +
+'      };\n' +
+'\n' +
+'      // Create MCP proxy to track calls and tool names\n' +
+'      // Also provide better error messages when a tool is not found\n' +
+'      const mcp = new Proxy(mcpBinding, {\n' +
+'        get(target, prop) {\n' +
+'          const original = target[prop];\n' +
+'          if (typeof original === \'function\') {\n' +
+'            return async (...args) => {\n' +
+'              mcpCallCount++;\n' +
+'              toolsCalled.add(String(prop));\n' +
+'              return await original.apply(target, args);\n' +
+'            };\n' +
+'          }\n' +
+'          // Tool not found - provide helpful error message\n' +
+'          // Skip special properties like \'then\' (for await) and Symbol properties\n' +
+'          if (prop !== \'then\' && typeof prop !== \'symbol\') {\n' +
+'            const availableTools = Object.keys(target).join(\', \');\n' +
+'            throw new Error(`Tool "${String(prop)}" not found. Available tools: ${availableTools || \'none\'}`);\n' +
+'          }\n' +
+'          return original;\n' +
+'        },\n' +
+'      });\n' +
+'\n' +
+'      // Execute the user-provided code\n' +
+'      // The user code is embedded directly in this Worker module as executable statements\n' +
+'      // Each execution gets a fresh Worker isolate via Worker Loader API\n' +
+'      // Note: Function constructor and eval() are disallowed in Workers (CSP), so code must be embedded directly\n' +
+'      const executeWithTimeout = async () => {\n' +
+'        // User code is embedded below - it has access to \'mcp\' and \'env\'\n' +
+'        // User code embedded below\n' +
+escapedUserCode + '\n' +
+'      };\n' +
+'\n' +
+'      const timeoutPromise = new Promise((_, reject) => \n' +
+'        setTimeout(() => reject(new Error(\'Execution timeout\')), timeout)\n' +
+'      );\n' +
+'\n' +
+'      result = await Promise.race([executeWithTimeout(), timeoutPromise]);\n' +
+'\n' +
+'      return new Response(JSON.stringify({\n' +
+'        success: true,\n' +
+'        output: logs.join(\'\\\\n\'),\n' +
+'        result: result !== undefined ? result : null,\n' +
+'        metrics: {\n' +
+'          mcp_calls_made: mcpCallCount,\n' +
+'          tools_called: Array.from(toolsCalled),\n' +
+'        },\n' +
+'      }), {\n' +
+'        headers: { \'Content-Type\': \'application/json\' },\n' +
+'      });\n' +
+'    } catch (error) {\n' +
+'      return new Response(JSON.stringify({\n' +
+'        success: false,\n' +
+'        error: error.message,\n' +
+'        stack: error.stack,\n' +
+'        output: logs.join(\'\\\\n\'),\n' +
+'        metrics: {\n' +
+'          mcp_calls_made: mcpCallCount,\n' +
+'          tools_called: Array.from(toolsCalled),\n' +
+'        },\n' +
+'      }), {\n' +
+'        status: 500,\n' +
+'        headers: { \'Content-Type\': \'application/json\' },\n' +
+'      });\n' +
+'    } finally {\n' +
+'      // Restore console methods\n' +
+'      console.log = originalLog;\n' +
+'      console.error = originalError;\n' +
+'      console.warn = originalWarn;\n' +
+'    }\n' +
+'  }\n' +
+'};\n'
 
     return {
       compatibilityDate: '2025-06-01',
@@ -1089,38 +1394,189 @@ ${mcpBindingStubs}
     try {
       return await this.executeWithWrangler(mcpId, code, timeoutMs, instance)
     } catch (error: unknown) {
-      // Check if this is a "Wrangler not found" error
+      // Check if this is a "Wrangler not found" error (ENOENT from spawn)
+      // Only catch actual spawn ENOENT errors, not Wrangler execution errors
       const errorMessage =
         error instanceof Error ? error.message : String(error)
       const errorCode = (error as NodeJS.ErrnoException)?.code
-      const isWranglerNotFound =
-        errorMessage.includes('spawn') ||
-        errorMessage.includes('ENOENT') ||
-        errorMessage.includes('not found') ||
+      
+      // More specific detection: only ENOENT errors that mention spawn or the command
+      const isSpawnENOENT = 
         errorCode === 'ENOENT' ||
-        (errorMessage.includes('wrangler') && errorMessage.includes('command'))
+        (errorMessage.includes('ENOENT') && 
+         (errorMessage.includes('spawn') || 
+          errorMessage.includes('Failed to spawn') ||
+          errorMessage.includes(npxCmd)))
 
-      // If Wrangler is not available, mark it as unavailable and throw error
-      // We don't simulate execution - Wrangler is required for proper isolation
-      if (isWranglerNotFound && this.wranglerAvailable === null) {
+      // If Wrangler spawn failed (command not found), mark as unavailable
+      if (isSpawnENOENT && this.wranglerAvailable === null) {
         this.wranglerAvailable = false
         logger.error(
-          { mcpId, error: errorMessage },
-          'Wrangler is required but not available',
+          { mcpId, error: errorMessage, errorCode },
+          'Wrangler spawn failed - command not found',
         )
         throw new WorkerError(
           'Wrangler is required for Worker execution but is not available.\n' +
             'Wrangler provides the Cloudflare Worker isolation environment needed for safe code execution.\n' +
             'Please install Wrangler:\n' +
             '  npm install -g wrangler\n' +
-            '  or ensure npx can access wrangler: npx wrangler --version',
+            '  or ensure npx can access wrangler: npx wrangler --version\n\n' +
+            `Error details: ${errorMessage}`,
         )
       }
 
-      // For other errors (e.g., build errors, timeout), re-throw
+      // For other errors (e.g., build errors, timeout, path errors), re-throw
       // These are actual execution failures, not availability issues
+      logger.error(
+        { mcpId, error: errorMessage, errorCode, isSpawnENOENT },
+        'Wrangler execution error (not spawn failure)',
+      )
       throw error
     }
+  }
+
+
+  /**
+   * Try multiple path variations to find the Worker entry point that Wrangler can resolve
+   * Returns the first path that exists, or the best guess if none exist
+   */
+  private findWorkerEntryPoint(entryPoint: string): string {
+    const cwd = process.cwd()
+    const isWindows = process.platform === 'win32'
+    
+    // Generate multiple path variations to try
+    const pathVariations: Array<{ path: string; description: string }> = [
+      // 1. Relative path (most common)
+      { path: entryPoint, description: 'relative path' },
+      
+      // 2. Absolute path (Windows and Unix)
+      { path: resolve(cwd, entryPoint), description: 'absolute path (resolve)' },
+      
+      // 3. Normalized path separators (forward slashes)
+      { path: resolve(cwd, entryPoint).replace(/\\/g, '/'), description: 'absolute path (forward slashes)' },
+      
+      // 4. Windows-style backslashes (if on Windows)
+      ...(isWindows
+        ? [{ path: resolve(cwd, entryPoint).replace(/\//g, '\\'), description: 'absolute path (backslashes)' }]
+        : []),
+      
+      // 5. Path relative to cwd with explicit ./ prefix
+      { path: `./${entryPoint}`, description: 'relative path with ./ prefix' },
+    ]
+    
+    // Check which paths actually exist
+    const existingPaths = pathVariations.filter(({ path }) => existsSync(path))
+    
+    logger.info(
+      {
+        entryPoint,
+        cwd,
+        pathVariations: pathVariations.map((p) => ({
+          path: p.path,
+          description: p.description,
+          exists: existsSync(p.path),
+        })),
+        existingPaths: existingPaths.map((p) => p.path),
+      },
+      'Testing Worker entry point path variations',
+    )
+    
+    // Return first existing path, or first variation if none exist (let Wrangler handle the error)
+    const chosenPath = existingPaths.length > 0 ? existingPaths[0].path : pathVariations[0].path
+    
+    logger.info(
+      {
+        chosenPath,
+        description: existingPaths.length > 0 
+          ? existingPaths[0].description 
+          : `fallback: ${pathVariations[0].description} (file may not exist yet)`,
+        exists: existsSync(chosenPath),
+      },
+      'Selected Worker entry point path',
+    )
+    
+    return chosenPath
+  }
+
+  /**
+   * Determine the correct Worker runtime entry point based on environment
+   * Checks once and caches the result (includes one-time file existence check)
+   * 
+   * TODO: Once we see the logged absolute path, hardcode it here to remove file system checks
+   * 
+   * Detection priority:
+   * 1. NODE_ENV environment variable (set to 'development' in MCP config for dev mode)
+   * 2. Process argv detection (running via tsx)
+   * 3. Default to production (dist/worker/runtime.js)
+   */
+  private getWorkerEntryPoint(): string {
+    // Return cached value if already determined
+    if (this.cachedWorkerEntryPoint !== null) {
+      return this.cachedWorkerEntryPoint
+    }
+
+    const cwd = process.cwd()
+    
+    // Check NODE_ENV (can be set in MCP config: env: { NODE_ENV: 'development' })
+    const nodeEnv = process.env.NODE_ENV
+    const isNodeEnvDev = nodeEnv === 'development'
+    const isNodeEnvProd = nodeEnv === 'production'
+    
+    // Lightweight detection: check if running via tsx
+    const isRunningViaTsx = 
+      process.argv[1]?.includes('tsx') || 
+      process.argv[0]?.includes('tsx') ||
+      process.argv[1]?.includes('src/server/index.ts') ||
+      process.argv[1]?.includes('src\\server\\index.ts')
+    
+    // Determine if we're in dev mode
+    const isDevMode = isNodeEnvDev || (!isNodeEnvProd && isRunningViaTsx)
+    
+    // Check which file actually exists (one-time check, then cached)
+    const devPath = join(cwd, 'src', 'worker', 'runtime.ts')
+    const prodPath = join(cwd, 'dist', 'worker', 'runtime.js')
+    const devExists = existsSync(devPath)
+    const prodExists = existsSync(prodPath)
+    
+    // Determine entry point: prefer dev if in dev mode and file exists, otherwise use prod if exists
+    let entryPoint: string
+    if (isDevMode && devExists) {
+      entryPoint = 'src/worker/runtime.ts'
+    } else if (prodExists) {
+      entryPoint = 'dist/worker/runtime.js'
+    } else if (isDevMode) {
+      // Dev mode but file doesn't exist - use dev path anyway (might be path issue)
+      entryPoint = 'src/worker/runtime.ts'
+      logger.warn(
+        { devPath, prodPath, cwd },
+        'Dev entry point file not found, using dev path anyway',
+      )
+    } else {
+      // Production mode but file doesn't exist - use prod path anyway
+      entryPoint = 'dist/worker/runtime.js'
+      logger.warn(
+        { devPath, prodPath, cwd },
+        'Production entry point file not found, using prod path anyway',
+      )
+    }
+    
+    // Cache the result
+    this.cachedWorkerEntryPoint = entryPoint
+    
+    logger.info(
+      {
+        entryPoint,
+        isDevMode,
+        nodeEnv,
+        isRunningViaTsx,
+        devExists,
+        prodExists,
+        cwd,
+      },
+      'Determined Worker entry point (cached)',
+    )
+    
+    return entryPoint
   }
 
   private async executeWithWrangler(
@@ -1173,15 +1629,86 @@ ${mcpBindingStubs}
         { mcpId, port },
         'Starting Wrangler dev server for parent Worker',
       )
-      wranglerProcess = spawn(
-        npxCmd,
-        ['wrangler', 'dev', '--local', '--port', port.toString()],
+      
+      // Determine the correct entry point based on environment (dev vs prod)
+      const baseEntryPoint = this.getWorkerEntryPoint()
+      
+      // CRITICAL: Always use project root as CWD when spawning Wrangler
+      // Test script showed that relative paths only work when CWD is the project root
+      // When MCP server runs from a different directory, process.cwd() won't be the project root
+      const wranglerCwd = this.projectRoot || process.cwd()
+      const entryPointPath = resolve(wranglerCwd, baseEntryPoint)
+      const entryPointExists = existsSync(entryPointPath)
+      
+      // Use relative path from project root (test showed this works when CWD is project root)
+      const entryPointForWrangler = baseEntryPoint
+      
+      logger.info(
         {
-          cwd: process.cwd(), // Use project root where wrangler.toml is
-          stdio: ['ignore', 'pipe', 'pipe'],
-          shell: isWindows,
+          mcpId,
+          port,
+          baseEntryPoint,
+          entryPointForWrangler,
+          wranglerCwd,
+          entryPointPath,
+          entryPointExists,
+          actualCwd: process.cwd(),
+          projectRoot: this.projectRoot,
         },
+        'Spawning Wrangler - using project root as CWD',
       )
+      
+      // Verify the entry point exists before spawning
+      if (!entryPointExists) {
+        const error = new Error(
+          `Worker entry point not found at project root.\n` +
+            `  - Project root: ${wranglerCwd}\n` +
+            `  - Entry point: ${baseEntryPoint}\n` +
+            `  - Full path: ${entryPointPath}\n` +
+            `  - Exists: ${entryPointExists}`,
+        )
+        logger.error({ error, wranglerCwd, baseEntryPoint, entryPointPath }, 'Entry point not found')
+        throw error
+      }
+      
+      // Build Wrangler command args
+      // Pass entry point directly on command line - wrangler.toml only needs worker_loaders binding
+      const wranglerArgs: string[] = [
+        'wrangler',
+        'dev',
+        entryPointForWrangler,
+        '--local',
+        '--port',
+        port.toString(),
+      ]
+      
+      // Spawn Wrangler process
+      // Note: spawn doesn't throw synchronously - errors come through 'error' event
+      wranglerProcess = spawn(npxCmd, wranglerArgs, {
+        cwd: wranglerCwd, // CRITICAL: Use project root, not process.cwd()
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: isWindows,
+      })
+
+      // Handle spawn errors (e.g., npx/wrangler not found)
+      // This is different from Wrangler execution errors (which come through stderr)
+      let spawnError: Error | null = null
+      let errorHandled = false
+      wranglerProcess.on('error', (error: NodeJS.ErrnoException) => {
+        if (errorHandled) return // Prevent double handling
+        spawnError = error
+        errorHandled = true
+        logger.error(
+          {
+            error: error.message,
+            code: error.code,
+            command: npxCmd,
+            args: wranglerArgs,
+            cwd: wranglerCwd,
+          },
+          'Wrangler spawn error - command may not be found',
+        )
+      })
 
       // Track Wrangler process for cleanup
       if (wranglerProcess?.pid) {
@@ -1193,7 +1720,7 @@ ${mcpBindingStubs}
             port,
             mcpId,
             command: npxCmd,
-            args: ['wrangler', 'dev', '--local', '--port', port.toString()],
+            args: wranglerArgs,
           },
           `Wrangler process spawned: PID ${wranglerProcess.pid} on port ${port}`,
         )
@@ -1227,6 +1754,22 @@ ${mcpBindingStubs}
 
       // Wait for Wrangler to be ready
       await new Promise<void>((resolve, reject) => {
+        // Check if spawn failed immediately (e.g., command not found)
+        if (spawnError) {
+          const isENOENT = spawnError.code === 'ENOENT' || spawnError.message.includes('ENOENT')
+          if (isENOENT) {
+            reject(new Error(
+              `Failed to spawn Wrangler: ${spawnError.message}\n` +
+              `Command: ${npxCmd} ${wranglerArgs.join(' ')}\n` +
+              `This usually means npx or wrangler is not installed or not in PATH.`
+            ))
+            return
+          }
+          // Other spawn errors - still reject but don't classify as "not found"
+          reject(spawnError)
+          return
+        }
+
         const timeout = setTimeout(() => {
           const error = new Error(
             'Wrangler dev server failed to start within 10 seconds',
@@ -1307,9 +1850,22 @@ ${mcpBindingStubs}
           })
         }
 
-        wranglerProcess?.on('error', (error) => {
+        // Handle process errors (including spawn errors that fire after Promise starts)
+        wranglerProcess?.on('error', (error: NodeJS.ErrnoException) => {
+          if (errorHandled) return // Already handled by spawnError handler
+          errorHandled = true
           clearTimeout(timeout)
-          reject(new Error(`Wrangler process error: ${error.message}`))
+          // Check if this is a spawn ENOENT error (command not found)
+          const isENOENT = error.code === 'ENOENT' || error.message.includes('ENOENT')
+          if (isENOENT) {
+            reject(new Error(
+              `Failed to spawn Wrangler: ${error.message}\n` +
+              `Command: ${npxCmd} ${wranglerArgs.join(' ')}\n` +
+              `This usually means npx or wrangler is not installed or not in PATH.`
+            ))
+          } else {
+            reject(new Error(`Wrangler process error: ${error.message}`))
+          }
         })
 
         wranglerProcess?.on('exit', (code, signal) => {
@@ -1345,7 +1901,9 @@ ${mcpBindingStubs}
             } else {
               const error = new Error(
                 `Wrangler process exited with code ${code} (signal: ${signal})`,
-              )
+              ) as Error & { code?: number; signal?: string | null }
+              error.code = code ?? undefined
+              error.signal = signal ?? undefined
               reject(error)
             }
           }
@@ -1411,12 +1969,20 @@ ${mcpBindingStubs}
         progress.showFinal()
       }
 
+      const metrics: ExecutionResult['metrics'] = result.metrics
+        ? {
+            mcp_calls_made: result.metrics.mcp_calls_made ?? 0,
+            tools_called: (result.metrics as ExecutionResult['metrics'])
+              .tools_called,
+          }
+        : {
+            mcp_calls_made: 0,
+          }
+
       return {
         output: result.output || '',
         result: result.result,
-        metrics: result.metrics || {
-          mcp_calls_made: 0,
-        },
+        metrics,
       }
     } catch (error: unknown) {
       // Determine which step failed
@@ -1520,7 +2086,16 @@ ${mcpBindingStubs}
         await this.killWranglerProcess(wranglerProcess)
       }
 
-      throw new WorkerError(`Wrangler execution failed: ${errorMessage}`)
+      // Include Wrangler output in error details for debugging
+      // Mark as fatal - Wrangler execution failures prevent code execution entirely
+      throw new WorkerError(`Wrangler execution failed: ${errorMessage}`, {
+        wrangler_stdout: wranglerStdout || '',
+        wrangler_stderr: wranglerStderr || '',
+        exit_code: (error as { code?: number })?.code,
+        mcp_id: mcpId,
+        port,
+        fatal: true, // Wrangler failures are fatal - cannot execute code without Worker runtime
+      })
     }
   }
 

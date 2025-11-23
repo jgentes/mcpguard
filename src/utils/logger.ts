@@ -21,15 +21,18 @@ const loggerConfig: pino.LoggerOptions = {
 
 // In dev mode, use pino-pretty for readable logs (configured to write to stderr)
 // In production/server mode, write JSON logs to stderr (standard practice for servers)
+// Check if we're running in a TTY - if not, we're likely an MCP server via stdio, so disable colors
+const isTTY = process.stderr.isTTY === true
 let logger: pino.Logger
 
 if (isDevMode) {
   // Use pino-pretty in dev mode, but write to stderr to avoid stdout conflicts
+  // Only enable colors if we're in a TTY (terminal), not when running as MCP server via stdio
   logger = pino(
     loggerConfig,
     pinoPretty({
       destination: process.stderr,
-      colorize: true,
+      colorize: isTTY, // Only colorize if we're in a terminal
       translateTime: 'HH:MM:ss.l',
       ignore: 'pid,hostname',
     })

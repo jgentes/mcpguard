@@ -48,6 +48,15 @@ export const MCPConfigSchema = z.union([
 
 export type MCPConfig = z.infer<typeof MCPConfigSchema>
 
+/**
+ * Type guard to check if MCPConfig is command-based (not URL-based)
+ */
+export function isCommandBasedConfig(
+  config: MCPConfig,
+): config is { command: string; args?: string[]; env?: Record<string, string> } {
+  return 'command' in config
+}
+
 // Load MCP Request
 export const LoadMCPRequestSchema = z.object({
   mcp_name: z
@@ -104,8 +113,10 @@ export interface SecurityMetrics {
 export interface ExecutionResult {
   success: boolean
   output?: string
+  result?: unknown // Optional result from code execution
   error?: string
   execution_time_ms: number
+  error_details?: unknown // Additional error details (e.g., Wrangler stdout/stderr)
   metrics: {
     mcp_calls_made: number
     tools_called?: string[]
@@ -169,4 +180,11 @@ export interface SavedMCPConfig {
   mcp_name: string
   config: MCPConfig
   source: 'cursor' | 'claude-code' | 'github-copilot'
+}
+
+// Transparent Proxy Configuration
+export interface TransparentProxyConfig {
+  mode?: 'transparent-proxy' | 'manual' | 'auto-detect'
+  auto_guard_new?: boolean
+  namespace_tools?: boolean
 }

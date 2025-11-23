@@ -17,6 +17,12 @@ export interface MCPServersConfig {
     version?: string
     disabled_at?: string
   }
+  // Transparent proxy configuration
+  _mcpguard?: {
+    mode?: 'transparent-proxy' | 'manual' | 'auto-detect'
+    auto_guard_new?: boolean
+    namespace_tools?: boolean
+  }
 }
 
 /**
@@ -700,6 +706,64 @@ export class ConfigManager {
     }
     const ide = this.ideDefinitions.find((d) => d.id === this.configSource)
     return ide ? ide.displayName : 'IDE'
+  }
+
+  /**
+   * Get all configured MCPs (including disabled ones) for transparent proxy discovery
+   * Returns all MCPs with their status (active or disabled)
+   * Excludes mcpguard itself
+   */
+  getAllConfiguredMCPs(): Record<
+    string,
+    {
+      config: MCPConfig
+      source: 'cursor' | 'claude-code' | 'github-copilot'
+      status: 'active' | 'disabled'
+    }
+  > {
+    const allMCPs: Record<
+      string,
+      {
+        config: MCPConfig
+        source: 'cursor' | 'claude-code' | 'github-copilot'
+        status: 'active' | 'disabled'
+      }
+    > = {}
+
+    if (!this.configPath || !this.configSource) {
+      return allMCPs
+    }
+
+    const rawConfig = this.readRawConfigFile(this.configPath)
+    if (!rawConfig) {
+      return allMCPs
+    }
+
+    // Include active MCPs (except mcpguard)
+    for (const [name, config] of Object.entries(rawConfig.mcpServers || {})) {
+      if (name.toLowerCase() !== 'mcpguard' && config) {
+        allMCPs[name] = {
+          config: config as MCPConfig,
+          source: this.configSource,
+          status: 'active',
+        }
+      }
+    }
+
+    // Include disabled MCPs (except mcpguard)
+    for (const [name, config] of Object.entries(
+      rawConfig._mcpguard_disabled || {},
+    )) {
+      if (name.toLowerCase() !== 'mcpguard' && config) {
+        allMCPs[name] = {
+          config: config as MCPConfig,
+          source: this.configSource,
+          status: 'disabled',
+        }
+      }
+    }
+
+    return allMCPs
   }
 
   /**

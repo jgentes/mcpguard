@@ -14,7 +14,7 @@ import {
   type MCPTool,
 } from '../types/mcp.js'
 import { ConfigManager } from '../utils/config-manager.js'
-import { MCPIsolateError } from '../utils/errors.js'
+import { MCPConnectionError, MCPIsolateError } from '../utils/errors.js'
 import logger from '../utils/logger.js'
 import { validateInput, validateTypeScriptCode } from '../utils/validation.js'
 import { MetricsCollector } from './metrics-collector.js'
@@ -25,6 +25,8 @@ export class MCPHandler {
   private workerManager: WorkerManager
   private metricsCollector: MetricsCollector
   private configManager: ConfigManager
+  // Cache for discovered MCP tools (for transparent proxy mode)
+  private discoveredMCPTools: Map<string, MCPTool[]> = new Map()
 
   constructor() {
     this.server = new Server(
@@ -46,69 +48,217 @@ export class MCPHandler {
     this.setupHandlers()
   }
 
+  /**
+   * Namespace a tool name with its MCP name
+   * Format: {mcpName}::{toolName}
+   */
+  private namespaceToolName(mcpName: string, toolName: string): string {
+    return `${mcpName}::${toolName}`
+  }
+
+  /**
+   * Parse a namespaced tool name back to MCP name and tool name
+   * Returns null if not namespaced
+   */
+  private parseToolNamespace(
+    namespacedName: string,
+  ): { mcpName: string; toolName: string } | null {
+    const parts = namespacedName.split('::')
+    if (parts.length === 2) {
+      return { mcpName: parts[0], toolName: parts[1] }
+    }
+    return null
+  }
+
+  /**
+   * Discover all configured MCPs from IDE config
+   * Returns map of MCP name to config and status
+   */
+  private async discoverConfiguredMCPs(): Promise<
+    Map<
+      string,
+      {
+        config: MCPConfig
+        source: 'cursor' | 'claude-code' | 'github-copilot'
+        status: 'active' | 'disabled'
+      }
+    >
+  > {
+    const allMCPs = this.configManager.getAllConfiguredMCPs()
+    const mcpMap = new Map<
+      string,
+      {
+        config: MCPConfig
+        source: 'cursor' | 'claude-code' | 'github-copilot'
+        status: 'active' | 'disabled'
+      }
+    >()
+
+    for (const [name, entry] of Object.entries(allMCPs)) {
+      mcpMap.set(name, entry)
+    }
+
+    return mcpMap
+  }
+
+  /**
+   * Ensure MCP tools are loaded for a specific MCP (lazy loading)
+   * Only loads if not already loaded
+   */
+  private async ensureMCPToolsLoaded(mcpName: string): Promise<void> {
+    // If already loaded, skip
+    if (this.discoveredMCPTools.has(mcpName)) {
+      return
+    }
+
+    // Load this specific MCP's tools
+    const configuredMCPs = await this.discoverConfiguredMCPs()
+    const entry = configuredMCPs.get(mcpName)
+    if (!entry) {
+      return // MCP not configured
+    }
+
+    try {
+      // Resolve environment variables
+      const resolvedConfig = this.configManager.resolveEnvVarsInObject(
+        entry.config,
+      ) as MCPConfig
+
+      // Load schema only (no process spawn)
+      const tools = await this.workerManager.loadMCPSchemaOnly(
+        mcpName,
+        resolvedConfig,
+      )
+
+      if (tools.length > 0) {
+        this.discoveredMCPTools.set(mcpName, tools)
+        logger.debug(
+          { mcpName, toolCount: tools.length },
+          'Lazy-loaded MCP tools for transparent proxy',
+        )
+      }
+    } catch (error: unknown) {
+      logger.warn(
+        { error, mcpName },
+        'Failed to lazy-load MCP tools for transparent proxy',
+      )
+      // Don't throw - just log and continue
+    }
+  }
+
+  /**
+   * Load tool schemas from all configured MCPs (for transparent proxy)
+   * Uses hybrid loading: schemas eagerly, processes lazily
+   * NOTE: This is NOT called by default for efficiency - tools are loaded lazily instead
+   */
+  private async loadAllMCPTools(): Promise<void> {
+    const configuredMCPs = await this.discoverConfiguredMCPs()
+
+    // Load schemas for all configured MCPs in parallel
+    const schemaPromises = Array.from(configuredMCPs.entries()).map(
+      async ([mcpName, entry]) => {
+        try {
+          // Resolve environment variables
+          const resolvedConfig = this.configManager.resolveEnvVarsInObject(
+            entry.config,
+          ) as MCPConfig
+
+          // Load schema only (no process spawn)
+          const tools = await this.workerManager.loadMCPSchemaOnly(
+            mcpName,
+            resolvedConfig,
+          )
+
+          if (tools.length > 0) {
+            this.discoveredMCPTools.set(mcpName, tools)
+            logger.debug(
+              { mcpName, toolCount: tools.length },
+              'Loaded MCP tools for transparent proxy',
+            )
+          }
+        } catch (error: unknown) {
+          logger.warn(
+            { error, mcpName },
+            'Failed to load MCP tools for transparent proxy',
+          )
+          // Continue with other MCPs even if one fails
+        }
+      },
+    )
+
+    await Promise.allSettled(schemaPromises)
+  }
+
   private setupHandlers(): void {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       logger.debug('Listing available tools')
 
-      return {
-        tools: [
-          {
-            name: 'load_mcp_server',
-            description:
-              'Manually load an MCP server into a secure isolated Worker environment for code mode execution. Usually not needed - execute_code will auto-load MCPs when needed. Use this if you need to pre-load an MCP or load with a custom configuration. Can use a saved configuration or load with a new configuration. Automatically saves the configuration unless auto_save is false.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                mcp_name: {
-                  type: 'string',
-                  description:
-                    'Unique identifier for this MCP instance (alphanumeric, hyphens, underscores only)',
-                },
-                mcp_config: {
-                  type: 'object',
-                  description:
-                    'MCP server connection configuration. Required if use_saved is false. Can use $' +
-                    '{VAR_NAME} syntax for environment variables.',
-                  properties: {
-                    command: {
-                      type: 'string',
-                      description:
-                        'Command to launch the MCP server (e.g., "npx", "node", "python")',
-                    },
-                    args: {
-                      type: 'array',
-                      items: { type: 'string' },
-                      description: 'Arguments for the MCP server command',
-                    },
-                    env: {
-                      type: 'object',
-                      description:
-                        'Environment variables for the MCP server. Use $' +
-                        '{VAR_NAME} syntax to reference .env variables.',
-                    },
-                  },
-                  required: ['command'],
-                },
-                use_saved: {
-                  type: 'boolean',
-                  description:
-                    'If true, load configuration from saved configs instead of using mcp_config. Default: false',
-                  default: false,
-                },
-                auto_save: {
-                  type: 'boolean',
-                  description:
-                    'If true, automatically save the configuration after loading. Default: true',
-                  default: true,
-                },
+      // DO NOT eagerly load all MCP tools - this defeats token efficiency!
+      // Instead, load schemas lazily when tools are actually called via transparent proxy
+      // This way, the IDE only sees MCPGuard's tools in the context window
+      // Individual MCP tools are loaded on-demand when execute_code is used or
+      // when a namespaced tool (e.g., github::search_repositories) is called
+      // await this.loadAllMCPTools() // DISABLED for efficiency
+
+      // Start with MCPGuard's own tools
+      const mcpGuardTools = [
+        {
+          name: 'load_mcp_server',
+          description:
+            'Manually load an MCP server into a secure isolated Worker environment for code mode execution. Usually not needed - execute_code will auto-load MCPs when needed. Use this if you need to pre-load an MCP or load with a custom configuration. Can use a saved configuration or load with a new configuration. Automatically saves the configuration unless auto_save is false.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              mcp_name: {
+                type: 'string',
+                description:
+                  'Unique identifier for this MCP instance (alphanumeric, hyphens, underscores only)',
               },
-              required: ['mcp_name'],
+              mcp_config: {
+                type: 'object',
+                description:
+                  'MCP server connection configuration. Required if use_saved is false. Can use $' +
+                  '{VAR_NAME} syntax for environment variables.',
+                properties: {
+                  command: {
+                    type: 'string',
+                    description:
+                      'Command to launch the MCP server (e.g., "npx", "node", "python")',
+                  },
+                  args: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Arguments for the MCP server command',
+                  },
+                  env: {
+                    type: 'object',
+                    description:
+                      'Environment variables for the MCP server. Use $' +
+                      '{VAR_NAME} syntax to reference .env variables.',
+                  },
+                },
+                required: ['command'],
+              },
+              use_saved: {
+                type: 'boolean',
+                description:
+                  'If true, load configuration from saved configs instead of using mcp_config. Default: false',
+                default: false,
+              },
+              auto_save: {
+                type: 'boolean',
+                description:
+                  'If true, automatically save the configuration after loading. Default: true',
+                default: true,
+              },
             },
+            required: ['mcp_name'],
           },
-          {
-            name: 'execute_code',
-            description: `PRIMARY tool for interacting with MCPs. Auto-loads MCPs from IDE config if needed. Use this instead of calling MCP tools directly. All MCP operations should go through this tool for secure isolation and efficiency.
+        },
+        {
+          name: 'execute_code',
+          description: `PRIMARY tool for interacting with MCPs. Auto-loads MCPs from IDE config if needed. Use this instead of calling MCP tools directly. All MCP operations should go through this tool for secure isolation and efficiency.
 
 The executed code receives two parameters:
 1. 'mcp' - An object containing all available MCP tools as async functions
@@ -141,22 +291,22 @@ The 'mcp' object is automatically generated from the MCP's tool schema. Each too
 Use console.log() to output results - all console output is captured and returned in the response.
 
 IMPORTANT: Provide either mcp_name (to auto-load from IDE config) or mcp_id (if already loaded). Using mcp_name is recommended as it automatically loads the MCP when needed.`,
-            inputSchema: {
-              type: 'object',
-              properties: {
-                mcp_id: {
-                  type: 'string',
-                  description:
-                    'UUID of the loaded MCP server (returned from load_mcp_server). Use if MCP is already loaded. Otherwise, use mcp_name to auto-load.',
-                },
-                mcp_name: {
-                  type: 'string',
-                  description:
-                    'Name of the MCP server from IDE config (e.g., "github", "filesystem"). Auto-loads the MCP if not already loaded. Use search_mcp_tools to discover available MCPs.',
-                },
-                code: {
-                  type: 'string',
-                  description: `TypeScript code to execute. The code receives 'mcp' and 'env' as parameters.
+          inputSchema: {
+            type: 'object',
+            properties: {
+              mcp_id: {
+                type: 'string',
+                description:
+                  'UUID of the loaded MCP server (returned from load_mcp_server). Use if MCP is already loaded. Otherwise, use mcp_name to auto-load.',
+              },
+              mcp_name: {
+                type: 'string',
+                description:
+                  'Name of the MCP server from IDE config (e.g., "github", "filesystem"). Auto-loads the MCP if not already loaded. Use search_mcp_tools to discover available MCPs.',
+              },
+              code: {
+                type: 'string',
+                description: `TypeScript code to execute. The code receives 'mcp' and 'env' as parameters.
                   
 Example code structure:
 \`\`\`typescript
@@ -166,188 +316,172 @@ console.log(JSON.stringify(result, null, 2));
 \`\`\`
 
 The code runs in an isolated Worker environment with no network access. All MCP communication happens through the 'mcp' binding object.`,
-                },
-                timeout_ms: {
-                  type: 'number',
-                  description:
-                    'Execution timeout in milliseconds (default: 30000, max: 60000)',
-                  default: 30000,
-                },
               },
-              required: ['code'],
-            },
-          },
-          {
-            name: 'list_available_mcps',
-            description:
-              'List all MCP servers currently loaded in Worker isolates. Returns a list with MCP IDs, names, status, and tool counts. Use get_mcp_by_name to find a specific MCP by name. Note: MCPs are auto-loaded when execute_code is called with mcp_name, so this shows actively loaded MCPs.',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
-          {
-            name: 'get_mcp_by_name',
-            description:
-              'Find a loaded MCP server by its name. Returns the MCP ID and basic information for quick lookup. This is more efficient than calling list_available_mcps and searching manually.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                mcp_name: {
-                  type: 'string',
-                  description:
-                    'Name of the MCP server to find (the name used when loading the MCP)',
-                },
+              timeout_ms: {
+                type: 'number',
+                description:
+                  'Execution timeout in milliseconds (default: 30000, max: 60000)',
+                default: 30000,
               },
-              required: ['mcp_name'],
             },
+            required: ['code'],
           },
-          {
-            name: 'get_mcp_schema',
-            description:
-              'Get the TypeScript API definition for a loaded MCP server',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                mcp_id: {
-                  type: 'string',
-                  description: 'UUID of the loaded MCP server',
-                },
+        },
+        {
+          name: 'list_available_mcps',
+          description:
+            'List all MCP servers currently loaded in Worker isolates. Returns a list with MCP IDs, names, status, and tool counts. Use get_mcp_by_name to find a specific MCP by name. Note: MCPs are auto-loaded when execute_code is called with mcp_name, so this shows actively loaded MCPs.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        {
+          name: 'get_mcp_by_name',
+          description:
+            'Find a loaded MCP server by its name. Returns the MCP ID and basic information for quick lookup. This is more efficient than calling list_available_mcps and searching manually.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              mcp_name: {
+                type: 'string',
+                description:
+                  'Name of the MCP server to find (the name used when loading the MCP)',
               },
-              required: ['mcp_id'],
             },
+            required: ['mcp_name'],
           },
-          {
-            name: 'unload_mcp_server',
-            description:
-              'Unload an MCP server and clean up its Worker isolate. Optionally remove from saved configurations.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                mcp_id: {
-                  type: 'string',
-                  description: 'UUID of the loaded MCP server to unload',
-                },
-                remove_from_saved: {
-                  type: 'boolean',
-                  description:
-                    'If true, also remove the MCP configuration from the IDE config file (Claude Code or Cursor). Default: false',
-                  default: false,
-                },
+        },
+        {
+          name: 'get_mcp_schema',
+          description:
+            'Get the TypeScript API definition for a loaded MCP server',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              mcp_id: {
+                type: 'string',
+                description: 'UUID of the loaded MCP server',
               },
-              required: ['mcp_id'],
             },
+            required: ['mcp_id'],
           },
-          {
-            name: 'get_metrics',
-            description:
-              'Get performance metrics and statistics for MCP operations',
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
-          {
-            name: 'list_saved_mcp_configs',
-            description:
-              "List all saved MCP configurations from Cursor's MCP configuration file",
-            inputSchema: {
-              type: 'object',
-              properties: {},
-            },
-          },
-          {
-            name: 'save_mcp_config',
-            description:
-              "Save an MCP configuration to Cursor's MCP configuration file. Configurations are saved in JSONC format with environment variable placeholders.",
-            inputSchema: {
-              type: 'object',
-              properties: {
-                mcp_name: {
-                  type: 'string',
-                  description: 'Name of the MCP server configuration to save',
-                },
-                mcp_config: {
-                  type: 'object',
-                  description:
-                    'MCP server configuration to save. Use $' +
-                    '{VAR_NAME} syntax for environment variables.',
-                  properties: {
-                    command: {
-                      type: 'string',
-                      description: 'Command to launch the MCP server',
-                    },
-                    args: {
-                      type: 'array',
-                      items: { type: 'string' },
-                      description: 'Arguments for the MCP server command',
-                    },
-                    env: {
-                      type: 'object',
-                      description:
-                        'Environment variables. Use $' +
-                        '{VAR_NAME} syntax to reference .env variables.',
-                    },
-                  },
-                  required: ['command'],
-                },
+        },
+        {
+          name: 'unload_mcp_server',
+          description:
+            'Unload an MCP server and clean up its Worker isolate. Optionally remove from saved configurations.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              mcp_id: {
+                type: 'string',
+                description: 'UUID of the loaded MCP server to unload',
               },
-              required: ['mcp_name', 'mcp_config'],
-            },
-          },
-          {
-            name: 'delete_mcp_config',
-            description:
-              "Delete a saved MCP configuration from Cursor's MCP configuration file",
-            inputSchema: {
-              type: 'object',
-              properties: {
-                mcp_name: {
-                  type: 'string',
-                  description: 'Name of the MCP server configuration to delete',
-                },
+              remove_from_saved: {
+                type: 'boolean',
+                description:
+                  'If true, also remove the MCP configuration from the IDE config file (Claude Code or Cursor). Default: false',
+                default: false,
               },
-              required: ['mcp_name'],
             },
+            required: ['mcp_id'],
           },
-          {
-            name: 'import_cursor_mcps',
-            description:
-              'Refresh/import MCP configurations from IDE configuration file (Claude Code, GitHub Copilot, or Cursor). Automatically discovers config location or uses provided path. Checks IDEs in priority order.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                cursor_config_path: {
-                  type: 'string',
-                  description:
-                    'Optional: Path to IDE config file. If not provided, will search default locations for Claude Code, GitHub Copilot, and Cursor.',
-                },
+        },
+        {
+          name: 'get_metrics',
+          description:
+            'Get performance metrics and statistics for MCP operations',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        {
+          name: 'import_cursor_mcps',
+          description:
+            'Refresh/import MCP configurations from IDE configuration file (Claude Code, GitHub Copilot, or Cursor). Automatically discovers config location or uses provided path. Checks IDEs in priority order.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              cursor_config_path: {
+                type: 'string',
+                description:
+                  'Optional: Path to IDE config file. If not provided, will search default locations for Claude Code, GitHub Copilot, and Cursor.',
               },
             },
           },
-          {
-            name: 'search_mcp_tools',
-            description:
-              'Search and discover MCP servers configured in your IDE. Returns all configured MCPs (except mcpguard) with their status and available tools. Use this to find which MCPs are available before calling execute_code. Implements the search_tools pattern for progressive disclosure - discover tools on-demand rather than loading all definitions upfront.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                query: {
-                  type: 'string',
-                  description:
-                    'Optional search term to filter by MCP name or tool name. If not provided, returns all configured MCPs.',
-                },
-                detail_level: {
-                  type: 'string',
-                  enum: ['summary', 'tools', 'full'],
-                  description:
-                    'Level of detail to return. summary: just MCP names and status. tools: includes tool names. full: includes full tool schemas (only for loaded MCPs). Default: summary',
-                  default: 'summary',
-                },
+        },
+        {
+          name: 'search_mcp_tools',
+          description:
+            'Search and discover MCP servers configured in your IDE. Returns all configured MCPs (except mcpguard) with their status and available tools. Use this to find which MCPs are available before calling execute_code. Implements the search_tools pattern for progressive disclosure - discover tools on-demand rather than loading all definitions upfront.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: {
+                type: 'string',
+                description:
+                  'Optional search term to filter by MCP name or tool name. If not provided, returns all configured MCPs.',
+              },
+              detail_level: {
+                type: 'string',
+                enum: ['summary', 'tools', 'full'],
+                description:
+                  'Level of detail to return. summary: just MCP names and status. tools: includes tool names. full: includes full tool schemas (only for loaded MCPs). Default: summary',
+                default: 'summary',
               },
             },
           },
-        ],
+        },
+        {
+          name: 'disable_mcps',
+          description:
+            'Disable MCP servers in your IDE configuration. This prevents the IDE from loading all their tools into the context window unnecessarily, maximizing efficiency and ensuring all tool calls route through MCPGuard\'s secure isolation. Can disable specific MCPs or all MCPs except mcpguard.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              mcp_names: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                  'Array of MCP names to disable. If not provided or empty, disables all MCPs except mcpguard.',
+              },
+            },
+          },
+        },
+      ]
+
+      // Return only MCPGuard's own tools for efficiency
+      // Individual MCP tools are loaded lazily when:
+      // 1. execute_code is called with mcp_name (auto-loads that specific MCP)
+      // 2. A namespaced tool is called (e.g., github::search_repositories) - loads that MCP on-demand
+      // This ensures the IDE context window only contains MCPGuard's tools, not all MCP tools
+      const aggregatedTools: Array<{
+        name: string
+        description: string
+        inputSchema: {
+          type: string
+          properties: Record<string, unknown>
+          required?: string[]
+        }
+      }> = [...mcpGuardTools]
+
+      // Transparent proxy tools are NOT included in listTools for efficiency
+      // They are loaded on-demand when actually called
+      // This is the key efficiency gain: only load what you use!
+
+      logger.debug(
+        {
+          mcpGuardToolsCount: mcpGuardTools.length,
+          totalToolsCount: aggregatedTools.length,
+          note: 'MCP tools are loaded lazily on-demand for efficiency',
+        },
+        'Returning MCPGuard tools (MCP tools loaded lazily)',
+      )
+
+      return {
+        tools: aggregatedTools,
       }
     })
 
@@ -358,6 +492,19 @@ The code runs in an isolated Worker environment with no network access. All MCP 
       logger.info({ tool: name, args }, 'Tool called')
 
       try {
+        // Check if this is a namespaced tool (transparent proxy mode - lazy loading)
+        const namespace = this.parseToolNamespace(name)
+        if (namespace) {
+          // Lazy load: fetch schema for this MCP if not already loaded
+          await this.ensureMCPToolsLoaded(namespace.mcpName)
+          return await this.routeToolCall(
+            namespace.mcpName,
+            namespace.toolName,
+            args,
+          )
+        }
+
+        // Handle MCPGuard's own tools
         switch (name) {
           case 'load_mcp_server':
             return await this.handleLoadMCP(args)
@@ -380,32 +527,53 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           case 'get_metrics':
             return await this.handleGetMetrics()
 
-          case 'list_saved_mcp_configs':
-            return await this.handleListSavedConfigs()
-
-          case 'save_mcp_config':
-            return await this.handleSaveConfig(args)
-
-          case 'delete_mcp_config':
-            return await this.handleDeleteConfig(args)
-
           case 'import_cursor_mcps':
             return await this.handleImportCursorConfigs(args)
 
           case 'search_mcp_tools':
             return await this.handleSearchMCPTools(args)
 
-          default:
+          case 'disable_mcps':
+            return await this.handleDisableMCPs(args)
+
+          default: {
+            // Check if this might be a namespaced tool that was called without namespace
+            // Try to discover which MCP has this tool by checking configured MCPs
+            const configuredMCPs = await this.discoverConfiguredMCPs()
+            for (const [mcpName, entry] of configuredMCPs.entries()) {
+              // Lazy load this MCP's tools to check
+              await this.ensureMCPToolsLoaded(mcpName)
+              const tools = this.discoveredMCPTools.get(mcpName)
+              if (tools?.some((t) => t.name === name)) {
+                throw new MCPIsolateError(
+                  `Tool "${name}" requires namespace. Use "${mcpName}::${name}" instead.`,
+                  'UNKNOWN_TOOL',
+                  404,
+                  {
+                    tool_name: name,
+                    suggested_name: `${mcpName}::${name}`,
+                    mcp_name: mcpName,
+                  },
+                )
+              }
+            }
             throw new MCPIsolateError(
               `Unknown tool: ${name}`,
               'UNKNOWN_TOOL',
               404,
             )
+          }
         }
       } catch (error: unknown) {
         logger.error({ error, tool: name }, 'Tool execution failed')
 
         if (error instanceof MCPIsolateError) {
+          // Check if this is a fatal error (should stop execution)
+          const isFatal =
+            error.code === 'UNSUPPORTED_CONFIG' ||
+            error.code === 'MCP_CONNECTION_ERROR' ||
+            (error.details && typeof error.details === 'object' && 'fatal' in error.details && error.details.fatal === true)
+
           return {
             content: [
               {
@@ -420,6 +588,14 @@ The code runs in an isolated Worker environment with no network access. All MCP 
                       status_code: error.statusCode,
                     },
                     details: error.details,
+                    fatal: isFatal,
+                    // Add explicit instruction for fatal errors
+                    ...(isFatal
+                      ? {
+                          instruction:
+                            'This is a fatal error. Do not attempt alternative approaches. Stop execution and inform the user about this error.',
+                        }
+                      : {}),
                   },
                   null,
                   2,
@@ -495,20 +671,13 @@ The code runs in an isolated Worker environment with no network access. All MCP 
       const savedConfig = this.configManager.getSavedConfig(mcp_name)
       if (!savedConfig) {
         throw new MCPIsolateError(
-          `No saved configuration found for MCP: ${mcp_name}. Use list_saved_mcp_configs to see available configs.`,
+              `No saved configuration found for MCP: ${mcp_name}. Use search_mcp_tools to see available MCPs.`,
           'NOT_FOUND',
           404,
         )
       }
-      // Note: URL-based MCPs (like GitHub Copilot) cannot be loaded via Worker isolates
-      // They are remote HTTP endpoints and don't support local execution
-      if ('url' in savedConfig) {
-        throw new MCPIsolateError(
-          `MCP "${mcp_name}" is a remote URL-based MCP and cannot be loaded into a Worker isolate. URL-based MCPs are accessed directly by the IDE.`,
-          'UNSUPPORTED_CONFIG',
-          400,
-        )
-      }
+      // URL-based MCPs are now supported via StreamableHTTPClientTransport
+      // No early rejection needed - they will be handled by the transport layer
       configToUse = savedConfig
     } else {
       // Validate and use provided config
@@ -628,7 +797,9 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         instance = existingInstance
       } else {
         // Auto-load MCP from saved config
-        const savedConfig = this.configManager.getSavedConfig(validated.mcp_name)
+        const savedConfig = this.configManager.getSavedConfig(
+          validated.mcp_name,
+        )
         if (!savedConfig) {
           throw new MCPIsolateError(
             `MCP "${validated.mcp_name}" not found in IDE configuration. Use search_mcp_tools to see available MCPs.`,
@@ -642,6 +813,9 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           )
         }
 
+        // URL-based MCPs are now supported via StreamableHTTPClientTransport
+        // No early rejection needed - they will be handled by the transport layer
+
         // Resolve environment variables
         const resolvedConfig = this.configManager.resolveEnvVarsInObject(
           savedConfig,
@@ -654,25 +828,40 @@ The code runs in an isolated Worker environment with no network access. All MCP 
 
         // Load the MCP
         const startTime = Date.now()
-        const loadedInstance = await this.workerManager.loadMCP(
-          validated.mcp_name,
-          resolvedConfig,
-        )
-        const loadTime = Date.now() - startTime
+        try {
+          const loadedInstance = await this.workerManager.loadMCP(
+            validated.mcp_name,
+            resolvedConfig,
+          )
+          const loadTime = Date.now() - startTime
 
-        this.metricsCollector.recordMCPLoad(loadedInstance.mcp_id, loadTime)
+          this.metricsCollector.recordMCPLoad(loadedInstance.mcp_id, loadTime)
 
-        mcpId = loadedInstance.mcp_id
-        instance = loadedInstance
+          mcpId = loadedInstance.mcp_id
+          instance = loadedInstance
 
-        logger.info(
-          {
-            mcp_name: validated.mcp_name,
-            mcp_id: mcpId,
-            load_time_ms: loadTime,
-          },
-          'MCP auto-loaded successfully',
-        )
+          logger.info(
+            {
+              mcp_name: validated.mcp_name,
+              mcp_id: mcpId,
+              load_time_ms: loadTime,
+            },
+            'MCP auto-loaded successfully',
+          )
+        } catch (error: unknown) {
+          // Re-throw MCPConnectionError with enhanced context
+          if (error instanceof MCPConnectionError) {
+            throw new MCPConnectionError(
+              error.message,
+              {
+                mcp_name: validated.mcp_name,
+                original_error: error.details,
+                fatal: true,
+              },
+            )
+          }
+          throw error
+        }
       }
     } else if (validated.mcp_id) {
       mcpId = validated.mcp_id
@@ -712,31 +901,102 @@ The code runs in an isolated Worker environment with no network access. All MCP 
 
     // Enhance error response if execution failed
     if (!result.success) {
+      // Check if this is a fatal error (e.g., MCP connection error, Wrangler execution failure)
+      const errorMessage = result.error || ''
+      const errorDetails = result.error_details
+      const hasWranglerError =
+        errorMessage.includes('Wrangler execution failed') ||
+        errorMessage.includes('Wrangler process') ||
+        errorMessage.includes('Wrangler dev server') ||
+        (errorDetails &&
+          typeof errorDetails === 'object' &&
+          ('wrangler_stderr' in errorDetails || 'wrangler_stdout' in errorDetails))
+
+      const isFatal =
+        errorMessage.includes('MCP_CONNECTION_ERROR') ||
+        errorMessage.includes('URL-based MCP') ||
+        errorMessage.includes('cannot be loaded') ||
+        hasWranglerError ||
+        (errorDetails &&
+          typeof errorDetails === 'object' &&
+          'fatal' in errorDetails &&
+          errorDetails.fatal === true)
+
+      // Extract Wrangler error details for prominent display
+      let wranglerError: {
+        stderr?: string
+        stdout?: string
+        exit_code?: number
+        formatted_error?: string
+      } | null = null
+
+      if (
+        hasWranglerError &&
+        errorDetails &&
+        typeof errorDetails === 'object'
+      ) {
+        const stderr =
+          'wrangler_stderr' in errorDetails
+            ? String(errorDetails.wrangler_stderr)
+            : ''
+        const stdout =
+          'wrangler_stdout' in errorDetails
+            ? String(errorDetails.wrangler_stdout)
+            : ''
+
+        // Create a formatted, readable error message
+        const formattedError = this.formatWranglerError(stderr, stdout)
+
+        wranglerError = {
+          stderr: stderr || undefined,
+          stdout: stdout || undefined,
+          exit_code:
+            'exit_code' in errorDetails
+              ? Number(errorDetails.exit_code)
+              : undefined,
+          formatted_error: formattedError,
+        }
+      }
+
+      // Build simplified error response
+      const errorResponse: {
+        success: false
+        error_code: string
+        error_message: string
+        suggested_action: string
+        fatal: boolean
+        instruction?: string
+        wrangler_error?: typeof wranglerError
+        execution_time_ms: number
+      } = {
+        success: false,
+        error_code: 'EXECUTION_ERROR',
+        error_message: result.error || 'Code execution failed',
+        suggested_action: this.getExecutionErrorSuggestion(result.error),
+        fatal: isFatal,
+        execution_time_ms: result.execution_time_ms,
+      }
+
+      // Add Wrangler error prominently if present
+      if (wranglerError) {
+        errorResponse.wrangler_error = wranglerError
+        // Also include formatted error in the main error message for better visibility
+        if (wranglerError.formatted_error) {
+          errorResponse.error_message = `${errorResponse.error_message}\n\n${wranglerError.formatted_error}`
+        }
+      }
+
+      // Add explicit instruction for fatal errors
+      if (isFatal) {
+        errorResponse.instruction =
+          'This is a fatal error. Do not attempt alternative approaches. Stop execution and inform the user about this error.'
+      }
+
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(
-              {
-                success: false,
-                error_code: 'EXECUTION_ERROR',
-                error_message: result.error || 'Code execution failed',
-                suggested_action: this.getExecutionErrorSuggestion(
-                  result.error,
-                ),
-                context: {
-                  mcp_id: mcpId,
-                  mcp_name: instance.mcp_name,
-                  code_length: validated.code.length,
-                  timeout_ms: validated.timeout_ms,
-                },
-                execution_time_ms: result.execution_time_ms,
-                metrics: result.metrics,
-                output: result.output,
-              },
-              null,
-              2,
-            ),
+            text: JSON.stringify(errorResponse, null, 2),
           },
         ],
         isError: true,
@@ -753,12 +1013,50 @@ The code runs in an isolated Worker environment with no network access. All MCP 
     }
   }
 
+  /**
+   * Format Wrangler error output for better readability
+   * Removes ANSI codes and structures the error message
+   */
+  private formatWranglerError(stderr: string, stdout: string): string {
+    // Remove ANSI escape codes for cleaner output
+    const cleanStderr = stderr.replace(/\u001b\[[0-9;]*m/g, '')
+    const cleanStdout = stdout.replace(/\u001b\[[0-9;]*m/g, '')
+
+    const parts: string[] = []
+
+    if (cleanStderr.trim()) {
+      parts.push('Wrangler Error Output:')
+      parts.push('─'.repeat(50))
+      parts.push(cleanStderr.trim())
+    }
+
+    if (cleanStdout.trim() && !cleanStdout.includes('wrangler')) {
+      // Only include stdout if it's not just the wrangler banner
+      parts.push('')
+      parts.push('Wrangler Output:')
+      parts.push('─'.repeat(50))
+      parts.push(cleanStdout.trim())
+    }
+
+    return parts.join('\n')
+  }
+
   private getExecutionErrorSuggestion(error?: string): string {
     if (!error) {
       return 'Review the code and try again. Check that all MCP tool calls are correct.'
     }
 
     const errorLower = error.toLowerCase()
+
+    if (errorLower.includes('wrangler')) {
+      if (errorLower.includes('missing entry-point') || errorLower.includes('entry-point')) {
+        return 'Wrangler configuration error: Missing entry point. This is a fatal error - MCPGuard cannot execute code without a properly configured Worker runtime. Check that src/worker/runtime.ts exists and wrangler.toml is correctly configured.'
+      }
+      if (errorLower.includes('exited with code')) {
+        return 'Wrangler execution failed. This is a fatal error - MCPGuard cannot execute code. Check the error_details for Wrangler stderr/stdout output to diagnose the issue. Common causes: missing dependencies, configuration errors, or Wrangler version incompatibility.'
+      }
+      return 'Wrangler execution error. This is a fatal error - MCPGuard cannot execute code. Check the error_details for detailed Wrangler output. Ensure Wrangler is installed (npx wrangler --version) and the Worker runtime is properly configured.'
+    }
 
     if (errorLower.includes('timeout')) {
       return 'Execution timed out. Try increasing timeout_ms or optimizing the code to run faster.'
@@ -1011,7 +1309,8 @@ The code runs in an isolated Worker environment with no network access. All MCP 
       INVALID_INPUT: `Invalid input provided. Check the tool's inputSchema for required parameters and their types.`,
       VALIDATION_ERROR: `Input validation failed. Review the error details and ensure all required fields are provided with correct types.`,
       WORKER_ERROR: `Worker execution error. The MCP may not be ready. Check the MCP status with list_available_mcps.`,
-      MCP_CONNECTION_ERROR: `Failed to connect to MCP server. Verify the MCP configuration (command, args, env) and ensure the MCP server is accessible.`,
+      MCP_CONNECTION_ERROR: `Failed to connect to MCP server. This is a fatal error - do not attempt alternative approaches. Verify the MCP configuration (command, args, env for command-based, or url, headers for URL-based) and ensure the MCP server is accessible.`,
+      UNSUPPORTED_CONFIG: `This MCP configuration is not supported. Check the configuration format and ensure it matches the expected schema.`,
       SECURITY_ERROR: `Code validation failed. The code contains prohibited patterns. Review the code and remove any dangerous operations.`,
       UNKNOWN_TOOL: `Unknown tool: ${toolName}. Check available tools with list_available_mcps.`,
     }
@@ -1112,173 +1411,105 @@ console.log(JSON.stringify(result, null, 2));`
     return patterns
   }
 
-  private async handleListSavedConfigs() {
-    const savedConfigs = this.configManager.getSavedConfigs()
-    const loadedInstances = this.workerManager.listInstances()
+  private async handleDisableMCPs(args: unknown) {
+    const typedArgs =
+      args && typeof args === 'object'
+        ? (args as { mcp_names?: string[] })
+        : {}
+    const { mcp_names } = typedArgs
 
-    // Create a map of loaded instances by name for quick lookup
-    const loadedMap = new Map<string, MCPInstance>()
-    for (const instance of loadedInstances) {
-      loadedMap.set(instance.mcp_name, instance)
-    }
-
-    const configs = Object.entries(savedConfigs).map(([name, entry]) => {
-      const loadedInstance = loadedMap.get(name)
-      return {
-        mcp_name: name,
-        config: entry.config,
-        source: entry.source,
-        status: loadedInstance ? 'loaded' : 'not_loaded',
-        tools_count: loadedInstance?.tools.length || 0,
-        mcp_id: loadedInstance?.mcp_id,
-      }
-    })
-
-    const loadedCount = configs.filter((c) => c.status === 'loaded').length
-    const notLoadedCount = configs.filter((c) => c.status === 'not_loaded').length
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              configs,
-              total_count: configs.length,
-              loaded_count: loadedCount,
-              not_loaded_count: notLoadedCount,
-              config_path: this.configManager.getCursorConfigPath(),
-              config_source: this.configManager.getConfigSource(),
-              note:
-                'These MCPs are configured in your IDE. Use execute_code with mcp_name to auto-load and access them. Only mcpguard should be directly accessible - all other MCPs should be accessed through execute_code for secure isolation.',
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    }
-  }
-
-  private async handleSaveConfig(args: unknown) {
-    if (
-      !args ||
-      typeof args !== 'object' ||
-      !('mcp_name' in args) ||
-      typeof args.mcp_name !== 'string'
-    ) {
+    const configPath = this.configManager.getCursorConfigPath()
+    if (!configPath) {
       throw new MCPIsolateError(
-        'mcp_name is required and must be a string',
-        'INVALID_INPUT',
-        400,
-      )
-    }
-
-    const { mcp_name, mcp_config } = args as {
-      mcp_name: string
-      mcp_config?: unknown
-    }
-
-    if (!mcp_name) {
-      throw new MCPIsolateError(
-        'mcp_name is required and must be a string',
-        'INVALID_INPUT',
-        400,
-      )
-    }
-
-    if (!mcp_config || typeof mcp_config !== 'object') {
-      throw new MCPIsolateError(
-        'mcp_config is required and must be an object',
-        'INVALID_INPUT',
-        400,
-      )
-    }
-
-    // Validate config structure
-    const config = mcp_config as Record<string, unknown>
-    if (!config.command || typeof config.command !== 'string') {
-      throw new MCPIsolateError(
-        'mcp_config.command is required and must be a string',
-        'INVALID_INPUT',
-        400,
-      )
-    }
-
-    // Validate and convert to MCPConfig
-    const validatedConfig = validateInput(LoadMCPRequestSchema, {
-      mcp_name,
-      mcp_config,
-    }).mcp_config
-
-    this.configManager.saveConfig(mcp_name, validatedConfig)
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              success: true,
-              message: `MCP configuration '${mcp_name}' saved successfully`,
-              config_path: this.configManager.getCursorConfigPath(),
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    }
-  }
-
-  private async handleDeleteConfig(args: unknown) {
-    if (
-      !args ||
-      typeof args !== 'object' ||
-      !('mcp_name' in args) ||
-      typeof args.mcp_name !== 'string'
-    ) {
-      throw new MCPIsolateError(
-        'mcp_name is required and must be a string',
-        'INVALID_INPUT',
-        400,
-      )
-    }
-
-    const { mcp_name } = args as { mcp_name: string }
-
-    if (!mcp_name) {
-      throw new MCPIsolateError(
-        'mcp_name is required and must be a string',
-        'INVALID_INPUT',
-        400,
-      )
-    }
-
-    const deleted = this.configManager.deleteConfig(mcp_name)
-
-    if (!deleted) {
-      const sourceName = this.configManager.getConfigSourceDisplayName()
-      throw new MCPIsolateError(
-        `MCP configuration '${mcp_name}' not found in ${sourceName} config file`,
-        'NOT_FOUND',
+        'No IDE MCP configuration file found. Please add MCPGuard to your IDE config first.',
+        'CONFIG_NOT_FOUND',
         404,
       )
     }
 
+    const sourceName = this.configManager.getConfigSourceDisplayName()
+    const result: {
+      disabled: string[]
+      alreadyDisabled: string[]
+      failed: string[]
+      mcpguardRestored: boolean
+    } = {
+      disabled: [],
+      alreadyDisabled: [],
+      failed: [],
+      mcpguardRestored: false,
+    }
+
+    if (mcp_names && mcp_names.length > 0) {
+      // Disable specific MCPs
+      for (const mcpName of mcp_names) {
+        if (mcpName.toLowerCase() === 'mcpguard') {
+          continue // Skip mcpguard
+        }
+
+        if (this.configManager.isMCPDisabled(mcpName)) {
+          result.alreadyDisabled.push(mcpName)
+        } else if (this.configManager.disableMCP(mcpName)) {
+          result.disabled.push(mcpName)
+        } else {
+          result.failed.push(mcpName)
+        }
+      }
+    } else {
+      // Disable all MCPs except mcpguard
+      const disableResult = this.configManager.disableAllExceptMCPGuard()
+      result.disabled = disableResult.disabled
+      result.alreadyDisabled = disableResult.alreadyDisabled
+      result.failed = disableResult.failed
+      result.mcpguardRestored = disableResult.mcpguardRestored
+    }
+
+    const response: {
+      success: boolean
+      message: string
+      source: string
+      disabled: string[]
+      alreadyDisabled: string[]
+      failed: string[]
+      mcpguardRestored: boolean
+      note?: string
+    } = {
+      success: true,
+      message: `MCPs disabled in ${sourceName} configuration`,
+      source: sourceName,
+      disabled: result.disabled,
+      alreadyDisabled: result.alreadyDisabled,
+      failed: result.failed,
+      mcpguardRestored: result.mcpguardRestored,
+    }
+
+    if (result.disabled.length === 0 && result.alreadyDisabled.length === 0) {
+      response.message = `All specified MCPs are already disabled in ${sourceName} config`
+    }
+
+    if (result.failed.length > 0) {
+      response.note = `Some MCPs could not be disabled. They may not exist in the configuration.`
+    }
+
+    if (result.mcpguardRestored) {
+      response.note = `${response.note ? response.note + ' ' : ''}MCPGuard was restored to active config.`
+    }
+
+    logger.info(
+      {
+        disabled: result.disabled,
+        alreadyDisabled: result.alreadyDisabled,
+        failed: result.failed,
+        source: sourceName,
+      },
+      'MCPs disabled via disable_mcps tool',
+    )
+
     return {
       content: [
         {
           type: 'text',
-          text: JSON.stringify(
-            {
-              success: true,
-              message: `MCP configuration '${mcp_name}' deleted successfully`,
-              config_path: this.configManager.getCursorConfigPath(),
-            },
-            null,
-            2,
-          ),
+          text: JSON.stringify(response, null, 2),
         },
       ],
     }
@@ -1315,10 +1546,220 @@ console.log(JSON.stringify(result, null, 2));`
     }
   }
 
+  /**
+   * Route a tool call to the appropriate MCP through transparent proxy
+   * Auto-loads MCP if needed and executes tool call in isolation
+   */
+  private async routeToolCall(
+    mcpName: string,
+    toolName: string,
+    args: unknown,
+  ) {
+    logger.info(
+      { mcpName, toolName },
+      'Routing tool call through transparent proxy',
+    )
+
+    // Check if MCP is already loaded
+    let instance = this.workerManager.getMCPByName(mcpName)
+
+    if (!instance) {
+      // Auto-load MCP from saved config
+      const savedConfig = this.configManager.getSavedConfig(mcpName)
+      if (!savedConfig) {
+        throw new MCPIsolateError(
+          `MCP "${mcpName}" not found in IDE configuration. Use search_mcp_tools to see available MCPs.`,
+          'NOT_FOUND',
+          404,
+          {
+            mcp_name: mcpName,
+            suggestion:
+              'Use search_mcp_tools to discover configured MCPs, or use load_mcp_server to load a new MCP.',
+          },
+        )
+      }
+
+      // URL-based MCPs are now supported via StreamableHTTPClientTransport
+      // No early rejection needed - they will be handled by the transport layer
+
+      // Resolve environment variables
+      const resolvedConfig = this.configManager.resolveEnvVarsInObject(
+        savedConfig,
+      ) as MCPConfig
+
+      logger.info(
+        { mcp_name: mcpName },
+        'Auto-loading MCP for transparent proxy tool call',
+      )
+
+      // Load the MCP
+      const startTime = Date.now()
+      try {
+        instance = await this.workerManager.loadMCP(mcpName, resolvedConfig)
+        const loadTime = Date.now() - startTime
+
+        this.metricsCollector.recordMCPLoad(instance.mcp_id, loadTime)
+
+        logger.info(
+          {
+            mcp_name: mcpName,
+            mcp_id: instance.mcp_id,
+            load_time_ms: loadTime,
+          },
+          'MCP auto-loaded for transparent proxy',
+        )
+      } catch (error: unknown) {
+        // Re-throw MCPConnectionError with enhanced context
+        if (error instanceof MCPConnectionError) {
+          throw new MCPConnectionError(
+            error.message,
+            {
+              mcp_name: mcpName,
+              original_error: error.details,
+              fatal: true,
+            },
+          )
+        }
+        throw error
+      }
+    }
+
+    // Verify tool exists
+    const tool = instance.tools.find((t) => t.name === toolName)
+    if (!tool) {
+      throw new MCPIsolateError(
+        `Tool "${toolName}" not found in MCP "${mcpName}". Available tools: ${instance.tools.map((t) => t.name).join(', ')}`,
+        'NOT_FOUND',
+        404,
+        {
+          mcp_name: mcpName,
+          tool_name: toolName,
+          available_tools: instance.tools.map((t) => t.name),
+        },
+      )
+    }
+
+    // Generate TypeScript code to call the tool
+    const argsJson = JSON.stringify(args || {})
+    const code = `const result = await mcp.${toolName}(${argsJson});
+console.log(JSON.stringify(result, null, 2));
+return result;`
+
+    // Execute through isolation
+    logger.debug(
+      { mcpName, toolName, mcp_id: instance.mcp_id },
+      'Executing tool call in isolation',
+    )
+
+    const result = await this.workerManager.executeCode(
+      instance.mcp_id,
+      code,
+      30000, // Default timeout
+    )
+
+    this.metricsCollector.recordExecution(
+      instance.mcp_id,
+      result.execution_time_ms,
+      result.success,
+      result.metrics?.mcp_calls_made || 0,
+    )
+
+    if (!result.success) {
+      // Check if this is a fatal error (e.g., MCP connection error, Wrangler execution failure)
+      const errorMessage = result.error || ''
+      const errorDetails = result.error_details
+      const hasWranglerError =
+        errorMessage.includes('Wrangler execution failed') ||
+        errorMessage.includes('Wrangler process') ||
+        errorMessage.includes('Wrangler dev server') ||
+        (errorDetails &&
+          typeof errorDetails === 'object' &&
+          ('wrangler_stderr' in errorDetails || 'wrangler_stdout' in errorDetails))
+
+      const isFatal =
+        errorMessage.includes('MCP_CONNECTION_ERROR') ||
+        errorMessage.includes('URL-based MCP') ||
+        errorMessage.includes('cannot be loaded') ||
+        hasWranglerError ||
+        (errorDetails &&
+          typeof errorDetails === 'object' &&
+          'fatal' in errorDetails &&
+          errorDetails.fatal === true)
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                error_code: 'EXECUTION_ERROR',
+                error_message: result.error || 'Tool execution failed',
+                suggested_action: this.getExecutionErrorSuggestion(
+                  result.error,
+                ),
+                context: {
+                  mcp_name: mcpName,
+                  tool_name: toolName,
+                  mcp_id: instance.mcp_id,
+                },
+                execution_time_ms: result.execution_time_ms,
+                metrics: result.metrics,
+                output: result.output,
+                error_details: result.error_details,
+                fatal: isFatal,
+                // Add explicit instruction for fatal errors
+                ...(isFatal
+                  ? {
+                      instruction:
+                        'This is a fatal error. Do not attempt alternative approaches. Stop execution and inform the user about this error.',
+                    }
+                  : {}),
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+        isError: true,
+      }
+    }
+
+    // Parse result from output
+    let parsedResult: unknown = result.output
+    try {
+      // Try to parse JSON from output
+      const outputLines = result.output?.split('\n') || []
+      for (const line of outputLines) {
+        if (line.trim().startsWith('{') || line.trim().startsWith('[')) {
+          try {
+            parsedResult = JSON.parse(line.trim())
+            break
+          } catch {
+            // Continue trying other lines
+          }
+        }
+      }
+    } catch {
+      // Use output as-is if parsing fails
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(parsedResult, null, 2),
+        },
+      ],
+    }
+  }
+
   private async handleSearchMCPTools(args: unknown) {
     const typedArgs =
       args && typeof args === 'object'
-        ? (args as { query?: string; detail_level?: 'summary' | 'tools' | 'full' })
+        ? (args as {
+            query?: string
+            detail_level?: 'summary' | 'tools' | 'full'
+          })
         : {}
     const { query, detail_level = 'summary' } = typedArgs
 
@@ -1413,16 +1854,13 @@ console.log(JSON.stringify(result, null, 2));`
               mcps: results,
               total_count: results.length,
               loaded_count: results.filter((r) => r.status === 'loaded').length,
-              not_loaded_count: results.filter(
-                (r) => r.status === 'not_loaded',
-              ).length,
-              disabled_count: results.filter(
-                (r) => r.status === 'disabled',
-              ).length,
+              not_loaded_count: results.filter((r) => r.status === 'not_loaded')
+                .length,
+              disabled_count: results.filter((r) => r.status === 'disabled')
+                .length,
               config_path: configPath,
               config_source: configSource,
-              note:
-                'These MCPs are configured in your IDE. Disabled MCPs are guarded by MCPGuard and should be accessed through execute_code. Use execute_code with mcp_name to auto-load and use these MCPs.',
+              note: 'These MCPs are configured in your IDE. Disabled MCPs are guarded by MCPGuard and should be accessed through execute_code. Use execute_code with mcp_name to auto-load and use these MCPs.',
             },
             null,
             2,
