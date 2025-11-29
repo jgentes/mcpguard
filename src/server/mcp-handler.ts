@@ -10,7 +10,6 @@ import {
   type JSONSchemaProperty,
   LoadMCPRequestSchema,
   type MCPConfig,
-  type MCPInstance,
   type MCPTool,
 } from '../types/mcp.js'
 import { ConfigManager } from '../utils/config-manager.js'
@@ -48,13 +47,6 @@ export class MCPHandler {
     this.setupHandlers()
   }
 
-  /**
-   * Namespace a tool name with its MCP name
-   * Format: {mcpName}::{toolName}
-   */
-  private namespaceToolName(mcpName: string, toolName: string): string {
-    return `${mcpName}::${toolName}`
-  }
 
   /**
    * Parse a namespaced tool name back to MCP name and tool name
@@ -146,48 +138,6 @@ export class MCPHandler {
     }
   }
 
-  /**
-   * Load tool schemas from all configured MCPs (for transparent proxy)
-   * Uses hybrid loading: schemas eagerly, processes lazily
-   * NOTE: This is NOT called by default for efficiency - tools are loaded lazily instead
-   */
-  private async loadAllMCPTools(): Promise<void> {
-    const configuredMCPs = await this.discoverConfiguredMCPs()
-
-    // Load schemas for all configured MCPs in parallel
-    const schemaPromises = Array.from(configuredMCPs.entries()).map(
-      async ([mcpName, entry]) => {
-        try {
-          // Resolve environment variables
-          const resolvedConfig = this.configManager.resolveEnvVarsInObject(
-            entry.config,
-          ) as MCPConfig
-
-          // Load schema only (no process spawn)
-          const tools = await this.workerManager.loadMCPSchemaOnly(
-            mcpName,
-            resolvedConfig,
-          )
-
-          if (tools.length > 0) {
-            this.discoveredMCPTools.set(mcpName, tools)
-            logger.debug(
-              { mcpName, toolCount: tools.length },
-              'Loaded MCP tools for transparent proxy',
-            )
-          }
-        } catch (error: unknown) {
-          logger.warn(
-            { error, mcpName },
-            'Failed to load MCP tools for transparent proxy',
-          )
-          // Continue with other MCPs even if one fails
-        }
-      },
-    )
-
-    await Promise.allSettled(schemaPromises)
-  }
 
   private setupHandlers(): void {
     // List available tools
@@ -540,7 +490,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
             // Check if this might be a namespaced tool that was called without namespace
             // Try to discover which MCP has this tool by checking configured MCPs
             const configuredMCPs = await this.discoverConfiguredMCPs()
-            for (const [mcpName, entry] of configuredMCPs.entries()) {
+            for (const [mcpName] of configuredMCPs.entries()) {
               // Lazy load this MCP's tools to check
               await this.ensureMCPToolsLoaded(mcpName)
               const tools = this.discoveredMCPTools.get(mcpName)
@@ -569,10 +519,10 @@ The code runs in an isolated Worker environment with no network access. All MCP 
 
         if (error instanceof MCPIsolateError) {
           // Check if this is a fatal error (should stop execution)
-          const isFatal =
+          const isFatal: boolean =
             error.code === 'UNSUPPORTED_CONFIG' ||
             error.code === 'MCP_CONNECTION_ERROR' ||
-            (error.details && typeof error.details === 'object' && 'fatal' in error.details && error.details.fatal === true)
+            Boolean(error.details && typeof error.details === 'object' && 'fatal' in error.details && (error.details as { fatal?: boolean }).fatal === true)
 
           return {
             content: [
@@ -904,23 +854,23 @@ The code runs in an isolated Worker environment with no network access. All MCP 
       // Check if this is a fatal error (e.g., MCP connection error, Wrangler execution failure)
       const errorMessage = result.error || ''
       const errorDetails = result.error_details
-      const hasWranglerError =
+      const hasWranglerError: boolean =
         errorMessage.includes('Wrangler execution failed') ||
         errorMessage.includes('Wrangler process') ||
         errorMessage.includes('Wrangler dev server') ||
-        (errorDetails &&
+        Boolean(errorDetails &&
           typeof errorDetails === 'object' &&
           ('wrangler_stderr' in errorDetails || 'wrangler_stdout' in errorDetails))
 
-      const isFatal =
+      const isFatal: boolean =
         errorMessage.includes('MCP_CONNECTION_ERROR') ||
         errorMessage.includes('URL-based MCP') ||
         errorMessage.includes('cannot be loaded') ||
         hasWranglerError ||
-        (errorDetails &&
+        Boolean(errorDetails &&
           typeof errorDetails === 'object' &&
           'fatal' in errorDetails &&
-          errorDetails.fatal === true)
+          (errorDetails as { fatal?: boolean }).fatal === true)
 
       // Extract Wrangler error details for prominent display
       let wranglerError: {
@@ -1668,23 +1618,23 @@ return result;`
       // Check if this is a fatal error (e.g., MCP connection error, Wrangler execution failure)
       const errorMessage = result.error || ''
       const errorDetails = result.error_details
-      const hasWranglerError =
+      const hasWranglerError: boolean =
         errorMessage.includes('Wrangler execution failed') ||
         errorMessage.includes('Wrangler process') ||
         errorMessage.includes('Wrangler dev server') ||
-        (errorDetails &&
+        Boolean(errorDetails &&
           typeof errorDetails === 'object' &&
           ('wrangler_stderr' in errorDetails || 'wrangler_stdout' in errorDetails))
 
-      const isFatal =
+      const isFatal: boolean =
         errorMessage.includes('MCP_CONNECTION_ERROR') ||
         errorMessage.includes('URL-based MCP') ||
         errorMessage.includes('cannot be loaded') ||
         hasWranglerError ||
-        (errorDetails &&
+        Boolean(errorDetails &&
           typeof errorDetails === 'object' &&
           'fatal' in errorDetails &&
-          errorDetails.fatal === true)
+          (errorDetails as { fatal?: boolean }).fatal === true)
 
       return {
         content: [

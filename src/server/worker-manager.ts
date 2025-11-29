@@ -1367,7 +1367,8 @@ userCode + '\n' +
         (errorMessage.includes('ENOENT') && 
          (errorMessage.includes('spawn') || 
           errorMessage.includes('Failed to spawn') ||
-          errorMessage.includes(npxCmd)))
+          errorMessage.includes('npx') ||
+          errorMessage.includes('npx.cmd')))
 
       // If Wrangler spawn failed (command not found), mark as unavailable
       if (isSpawnENOENT && this.wranglerAvailable === null) {
@@ -1656,7 +1657,8 @@ userCode + '\n' +
       await new Promise<void>((resolve, reject) => {
         // Check if spawn failed immediately (e.g., command not found)
         if (spawnError) {
-          const isENOENT = spawnError.code === 'ENOENT' || spawnError.message.includes('ENOENT')
+          const spawnErrnoError = spawnError as NodeJS.ErrnoException
+          const isENOENT = spawnErrnoError.code === 'ENOENT' || spawnError.message.includes('ENOENT')
           if (isENOENT) {
             reject(new Error(
               `Failed to spawn Wrangler: ${spawnError.message}\n` +
