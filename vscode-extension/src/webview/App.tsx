@@ -2,15 +2,16 @@
  * Main App component for MCP Guard webview
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useSettings, useMCPServers, useNotifications, postMessage } from './hooks';
-import { Header, MCPCard, EmptyState, Notification, Button, ShieldIcon, ShieldOffIcon } from './components';
+import { Header, MCPCard, EmptyState, Notification, Button, ShieldIcon, ShieldOffIcon, BeakerIcon, TestingTab } from './components';
 import type { MCPSecurityConfig, MCPGuardSettings } from './types';
 
 export const App: React.FC = () => {
   const { settings, saveSettings, saveMCPConfig, isLoading: settingsLoading } = useSettings();
   const { servers, isLoading: serversLoading, refresh } = useMCPServers();
   const { notifications, dismiss } = useNotifications();
+  const [showTestingTab, setShowTestingTab] = useState(false);
 
   const isLoading = settingsLoading || serversLoading;
 
@@ -62,6 +63,33 @@ export const App: React.FC = () => {
         isLoading={isLoading}
       />
 
+      {/* Tab Buttons */}
+      {!showTestingTab && servers.length > 0 && (
+        <div style={{ marginBottom: '16px' }}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowTestingTab(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            <BeakerIcon size={14} />
+            Security Testing
+          </Button>
+        </div>
+      )}
+
+      {/* Testing Tab */}
+      {showTestingTab && (
+        <TestingTab
+          servers={sortedServers}
+          configs={settings.mcpConfigs}
+          onBack={() => setShowTestingTab(false)}
+        />
+      )}
+
+      {/* Main Content - Hidden when Testing Tab is shown */}
+      {!showTestingTab && (
+        <>
       {/* Disabled Banner */}
       {!settings.enabled && servers.length > 0 && (
         <div
@@ -259,6 +287,8 @@ export const App: React.FC = () => {
           </a>
         </p>
       </div>
+        </>
+      )}
     </div>
   );
 };

@@ -144,6 +144,47 @@ export const ShieldOffIcon: React.FC<IconProps> = ({ size = 20, className }) => 
   </svg>
 );
 
+// Copy icon for test prompts
+export const CopyIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+);
+
+// Beaker icon for testing
+export const BeakerIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M4.5 3h15" />
+    <path d="M6 3v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V3" />
+    <path d="M6 14h12" />
+  </svg>
+);
+
+// Close/X icon for modals
+export const CloseIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
+// Play icon for running tests
+export const PlayIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polygon points="5 3 19 12 5 21 5 3" />
+  </svg>
+);
+
+// Info icon
+export const InfoIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="16" x2="12" y2="12" />
+    <line x1="12" y1="8" x2="12.01" y2="8" />
+  </svg>
+);
+
 // ====================
 // UI Components
 // ====================
@@ -433,6 +474,8 @@ interface MCPCardProps {
 
 export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange, currentIDE = 'cursor', globalEnabled = true }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showTestModal, setShowTestModal] = useState(false);
+  const [selectedTestType, setSelectedTestType] = useState<'quick' | 'network' | 'codeInjection' | 'filesystem' | 'legitimate'>('quick');
   
   // Initialize config if not exists
   const currentConfig: MCPSecurityConfig = config || {
@@ -541,6 +584,15 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
           <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
             {server.command ? `${server.command} ${(server.args || []).slice(0, 2).join(' ')}...` : server.url || 'No command'}
           </div>
+        </div>
+
+        {/* Test Button */}
+        <div onClick={(e) => e.stopPropagation()}>
+          <TestButton
+            onClick={() => setShowTestModal(true)}
+            disabled={!globalEnabled}
+            isGuarded={currentConfig.isGuarded}
+          />
         </div>
 
         {/* Guard Toggle */}
@@ -734,6 +786,15 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
           </div>
         </div>
       )}
+
+      {/* Test Prompt Modal */}
+      <TestPromptModal
+        isOpen={showTestModal}
+        onClose={() => setShowTestModal(false)}
+        mcpName={server.name}
+        testType={selectedTestType}
+        isGuarded={currentConfig.isGuarded}
+      />
     </div>
   );
 };
@@ -840,5 +901,810 @@ export const EmptyState: React.FC<{ onImport: () => void }> = ({ onImport }) => 
     </Button>
   </div>
 );
+
+// ====================
+// Security Testing Components
+// ====================
+
+interface TestButtonProps {
+  onClick: () => void;
+  disabled?: boolean;
+  isGuarded?: boolean;
+}
+
+export const TestButton: React.FC<TestButtonProps> = ({ onClick, disabled, isGuarded }) => (
+  <Button
+    variant="ghost"
+    size="sm"
+    onClick={(e) => {
+      e?.stopPropagation();
+      onClick();
+    }}
+    disabled={disabled}
+    style={{ 
+      padding: '4px 8px',
+      color: isGuarded ? 'var(--success)' : 'var(--warning)',
+    }}
+  >
+    <BeakerIcon size={14} />
+    Test
+  </Button>
+);
+
+interface TestPromptModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  mcpName: string;
+  testType: 'quick' | 'network' | 'codeInjection' | 'filesystem' | 'legitimate';
+  isGuarded: boolean;
+}
+
+export const TestPromptModal: React.FC<TestPromptModalProps> = ({ isOpen, onClose, mcpName, testType, isGuarded }) => {
+  const [copied, setCopied] = useState(false);
+
+  const getTestPrompt = () => {
+    switch (testType) {
+      case 'quick':
+        return {
+          title: 'Quick Security Test',
+          description: 'Verify MCPGuard\'s protections are active with a quick test.',
+          prompt: `Test "${mcpName}" MCP security. Run this using execute_code with mcp_name "${mcpName}":
+
+\`\`\`typescript
+// Test 1: Network isolation
+try {
+  await fetch('https://httpcat.com/200');
+  console.log('FAIL: Network not blocked');
+} catch (e) {
+  console.log('PASS: Network blocked');
+}
+
+// Test 2: Call a legitimate tool to confirm it works
+// (The tool call itself proves legitimate operations work)
+\`\`\`
+
+Just report PASS or FAIL for each test.`,
+        };
+      
+      case 'network':
+        return {
+          title: 'Network Isolation Test',
+          description: 'Verify that arbitrary network requests are blocked.',
+          prompt: `Test network isolation for "${mcpName}". Run using execute_code with mcp_name "${mcpName}":
+
+\`\`\`typescript
+try {
+  await fetch('https://httpcat.com/200');
+  console.log('FAIL: Fetch succeeded - network not isolated');
+} catch (e) {
+  console.log('PASS: Network request blocked');
+}
+\`\`\`
+
+Just report PASS or FAIL.`,
+        };
+      
+      case 'codeInjection':
+        return {
+          title: 'Code Injection Test',
+          description: 'Verify that eval() and Function constructor are blocked.',
+          prompt: `Test code injection prevention for "${mcpName}". Run using execute_code with mcp_name "${mcpName}":
+
+\`\`\`typescript
+let pass = 0;
+try { eval('1'); } catch { pass++; console.log('PASS: eval blocked'); }
+try { new Function('1'); } catch { pass++; console.log('PASS: Function blocked'); }
+console.log(pass === 2 ? 'RESULT: Protected' : 'RESULT: Vulnerable');
+\`\`\`
+
+Just report the result.`,
+        };
+      
+      case 'filesystem':
+        return {
+          title: 'Filesystem Isolation Test',
+          description: 'Verify that filesystem access is blocked.',
+          prompt: `Test filesystem isolation for "${mcpName}". Run using execute_code with mcp_name "${mcpName}":
+
+\`\`\`typescript
+try {
+  require('fs');
+  console.log('FAIL: fs module accessible');
+} catch {
+  console.log('PASS: fs blocked');
+}
+\`\`\`
+
+Just report PASS or FAIL.`,
+        };
+      
+      case 'legitimate':
+        return {
+          title: 'Legitimate Tool Test',
+          description: 'Verify that normal MCP tools work correctly.',
+          prompt: `Test that "${mcpName}" tools work through MCPGuard.
+
+1. Use search_mcp_tools to find a tool for "${mcpName}"
+2. Call it using execute_code with mcp_name "${mcpName}"
+
+Just confirm if the tool call succeeded or failed.`,
+        };
+      
+      default:
+        return {
+          title: 'Security Test',
+          description: 'Verify MCPGuard protections.',
+          prompt: `Test "${mcpName}" MCP security using execute_code.`,
+        };
+    }
+  };
+
+  const testInfo = getTestPrompt();
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(testInfo.prompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  // Show different content for unguarded MCPs
+  if (!isGuarded) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '16px',
+        }}
+        onClick={onClose}
+      >
+        <div
+          style={{
+            background: 'var(--bg-primary)',
+            borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--border-color)',
+            maxWidth: '500px',
+            width: '100%',
+            overflow: 'hidden',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="animate-fade-in"
+        >
+          {/* Header */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '16px 20px',
+              borderBottom: '1px solid var(--border-color)',
+              background: 'rgba(255, 215, 0, 0.1)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <ShieldOffIcon size={20} />
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: 'var(--warning)' }}>
+                  MCP Not Guarded
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                  {mcpName}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '4px',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <CloseIcon size={20} />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div style={{ padding: '20px' }}>
+            <p style={{ margin: '0 0 16px', color: 'var(--text-primary)', fontSize: '13px' }}>
+              This MCP is currently <strong>unguarded</strong>, which means it has direct access without MCPGuard's security isolation.
+            </p>
+
+            {/* Risk Explanation */}
+            <div
+              style={{
+                background: 'rgba(255, 215, 0, 0.1)',
+                border: '1px solid rgba(255, 215, 0, 0.3)',
+                borderRadius: 'var(--radius-md)',
+                padding: '16px',
+                marginBottom: '16px',
+              }}
+            >
+              <h4 style={{ margin: '0 0 8px', fontSize: '13px', fontWeight: 600, color: 'var(--warning)' }}>
+                Potential Risks Without Guarding:
+              </h4>
+              <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <li><strong>Prompt Injection</strong> — Malicious content in MCP responses could trick the AI into harmful actions</li>
+                <li><strong>Data Exfiltration</strong> — Compromised code could send sensitive data to external servers</li>
+                <li><strong>Unauthorized Access</strong> — Code could attempt to access files or resources beyond the MCP's scope</li>
+              </ul>
+            </div>
+
+            {/* How MCPGuard Helps */}
+            <div
+              style={{
+                background: 'rgba(34, 197, 94, 0.1)',
+                border: '1px solid rgba(34, 197, 94, 0.3)',
+                borderRadius: 'var(--radius-md)',
+                padding: '16px',
+                marginBottom: '16px',
+              }}
+            >
+              <h4 style={{ margin: '0 0 8px', fontSize: '13px', fontWeight: 600, color: 'var(--success)' }}>
+                How MCPGuard Protects You:
+              </h4>
+              <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <li><strong>Network Isolation</strong> — All external network requests are blocked</li>
+                <li><strong>Sandboxed Execution</strong> — Code runs in an isolated Cloudflare Worker</li>
+                <li><strong>Code Validation</strong> — Dangerous patterns like eval() are blocked before execution</li>
+                <li><strong>Legitimate Calls Work</strong> — Normal MCP tool calls function correctly</li>
+              </ul>
+            </div>
+
+            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>
+              Enable guarding for this MCP, then run security tests to verify the protection is active.
+            </p>
+          </div>
+
+          {/* Footer */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '8px',
+              padding: '16px 20px',
+              borderTop: '1px solid var(--border-color)',
+              background: 'var(--bg-secondary)',
+            }}
+          >
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '16px',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg-primary)',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--border-color)',
+          maxWidth: '600px',
+          width: '100%',
+          maxHeight: '80vh',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        onClick={(e) => e.stopPropagation()}
+        className="animate-fade-in"
+      >
+        {/* Modal Header */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '16px 20px',
+            borderBottom: '1px solid var(--border-color)',
+            background: 'var(--bg-secondary)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <BeakerIcon size={20} />
+            <div>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>{testInfo.title}</h3>
+              <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {mcpName} — Guarded
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <CloseIcon size={20} />
+          </button>
+        </div>
+
+        {/* Modal Content */}
+        <div style={{ padding: '20px', overflow: 'auto', flex: 1 }}>
+          <p style={{ margin: '0 0 16px', color: 'var(--text-secondary)', fontSize: '13px' }}>
+            {testInfo.description}
+          </p>
+
+          {/* Instructions */}
+          <div
+            style={{
+              background: 'rgba(34, 197, 94, 0.1)',
+              border: '1px solid rgba(34, 197, 94, 0.3)',
+              borderRadius: 'var(--radius-md)',
+              padding: '12px 16px',
+              marginBottom: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+              <InfoIcon size={16} className={undefined} />
+              <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                <strong>How to run this test:</strong>
+                <ol style={{ margin: '8px 0 0', paddingLeft: '16px' }}>
+                  <li>Copy the prompt below</li>
+                  <li>Paste it into your AI chat (Cursor, Claude, etc.)</li>
+                  <li>The AI will execute the test via MCPGuard's secure isolation</li>
+                  <li>Review the results to verify protection is active</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+
+          {/* Prompt Box */}
+          <div
+            style={{
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 12px',
+                borderBottom: '1px solid var(--border-color)',
+                background: 'var(--bg-hover)',
+              }}
+            >
+              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                Test Prompt
+              </span>
+              <Button
+                variant={copied ? 'primary' : 'secondary'}
+                size="sm"
+                onClick={copyToClipboard}
+              >
+                {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                {copied ? 'Copied!' : 'Copy to Chat'}
+              </Button>
+            </div>
+            <pre
+              style={{
+                margin: 0,
+                padding: '16px',
+                fontSize: '12px',
+                lineHeight: 1.5,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                color: 'var(--text-primary)',
+                maxHeight: '300px',
+                overflow: 'auto',
+              }}
+            >
+              {testInfo.prompt}
+            </pre>
+          </div>
+        </div>
+
+        {/* Modal Footer */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '8px',
+            padding: '16px 20px',
+            borderTop: '1px solid var(--border-color)',
+            background: 'var(--bg-secondary)',
+          }}
+        >
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+          <Button variant="primary" onClick={copyToClipboard}>
+            <CopyIcon size={14} />
+            {copied ? 'Copied!' : 'Copy to Chat'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Test type selector for the modal
+interface TestTypeSelectorProps {
+  selectedType: 'quick' | 'network' | 'codeInjection' | 'filesystem' | 'legitimate';
+  onSelectType: (type: 'quick' | 'network' | 'codeInjection' | 'filesystem' | 'legitimate') => void;
+}
+
+export const TestTypeSelector: React.FC<TestTypeSelectorProps> = ({ selectedType, onSelectType }) => {
+  const testTypes = [
+    { id: 'quick' as const, name: 'Quick Test', description: 'Run all security tests', icon: <PlayIcon size={14} /> },
+    { id: 'legitimate' as const, name: 'Legitimate Call', description: 'Test normal tool usage', icon: <CheckIcon size={14} /> },
+    { id: 'network' as const, name: 'Network Isolation', description: 'Test fetch() blocking', icon: <NetworkIcon size={14} /> },
+    { id: 'codeInjection' as const, name: 'Code Injection', description: 'Test eval() blocking', icon: <ShieldIcon size={14} /> },
+    { id: 'filesystem' as const, name: 'Filesystem', description: 'Test fs access blocking', icon: <FolderIcon size={14} /> },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {testTypes.map((test) => (
+        <button
+          key={test.id}
+          onClick={() => onSelectType(test.id)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            padding: '12px 16px',
+            borderRadius: 'var(--radius-md)',
+            border: selectedType === test.id ? '2px solid #22c55e' : '1px solid var(--border-color)',
+            background: selectedType === test.id ? 'rgba(34, 197, 94, 0.1)' : 'var(--bg-secondary)',
+            cursor: 'pointer',
+            textAlign: 'left',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <div
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: 'var(--radius-sm)',
+              background: selectedType === test.id ? '#22c55e' : 'var(--bg-hover)',
+              color: selectedType === test.id ? 'white' : 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {test.icon}
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 500, fontSize: '13px' }}>{test.name}</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{test.description}</div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+};
+
+// ====================
+// Testing Tab Component
+// ====================
+
+interface TestingTabProps {
+  servers: MCPServerInfo[];
+  configs: MCPSecurityConfig[];
+  onBack: () => void;
+}
+
+export const TestingTab: React.FC<TestingTabProps> = ({ servers, configs, onBack }) => {
+  const [selectedMCP, setSelectedMCP] = useState<string | null>(null);
+  const [selectedTestType, setSelectedTestType] = useState<'quick' | 'network' | 'codeInjection' | 'filesystem' | 'legitimate'>('quick');
+  const [showModal, setShowModal] = useState(false);
+
+  // Get guard status for selected MCP
+  const getIsGuarded = (mcpName: string): boolean => {
+    const config = configs.find(c => c.mcpName === mcpName);
+    return config?.isGuarded ?? false;
+  };
+  
+  const selectedMCPIsGuarded = selectedMCP ? getIsGuarded(selectedMCP) : false;
+
+  const securityFeatures = [
+    {
+      icon: <NetworkIcon size={20} />,
+      title: 'Network Isolation',
+      description: 'Workers cannot make arbitrary network requests. All fetch() and HTTP calls are blocked.',
+      color: '#3b82f6',
+    },
+    {
+      icon: <ShieldIcon size={20} />,
+      title: 'Code Injection Prevention',
+      description: 'Dangerous patterns like eval(), Function constructor, and require() are blocked.',
+      color: '#22c55e',
+    },
+    {
+      icon: <FolderIcon size={20} />,
+      title: 'Filesystem Isolation',
+      description: 'No direct filesystem access. Workers run in a sandboxed environment.',
+      color: '#f59e0b',
+    },
+    {
+      icon: <ClockIcon size={20} />,
+      title: 'Resource Limits',
+      description: 'Execution time, memory, and MCP call limits prevent resource exhaustion attacks.',
+      color: '#8b5cf6',
+    },
+  ];
+
+  return (
+    <div style={{ padding: '16px' }}>
+      {/* Header */}
+      <div style={{ marginBottom: '24px' }}>
+        <button
+          onClick={onBack}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-secondary)',
+            cursor: 'pointer',
+            padding: '4px 0',
+            marginBottom: '12px',
+            fontSize: '12px',
+          }}
+        >
+          <ChevronDownIcon size={14} className={undefined} />
+          Back to MCPs
+        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: 'var(--radius-md)',
+              background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+            }}
+          >
+            <BeakerIcon size={24} />
+          </div>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>Security Testing</h2>
+            <p style={{ margin: '2px 0 0', fontSize: '13px', color: 'var(--text-secondary)' }}>
+              Validate that your MCPs are properly isolated
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* What MCPGuard Protects Against */}
+      <div style={{ marginBottom: '24px' }}>
+        <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', color: 'var(--text-primary)' }}>
+          What MCPGuard Protects Against
+        </h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+          {securityFeatures.map((feature, index) => (
+            <div
+              key={index}
+              style={{
+                padding: '16px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-color)',
+                background: 'var(--bg-secondary)',
+              }}
+            >
+              <div
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: `${feature.color}20`,
+                  color: feature.color,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: '12px',
+                }}
+              >
+                {feature.icon}
+              </div>
+              <h4 style={{ margin: '0 0 4px', fontSize: '13px', fontWeight: 600 }}>{feature.title}</h4>
+              <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                {feature.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Run a Test Section */}
+      <div style={{ marginBottom: '24px' }}>
+        <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '12px', color: 'var(--text-primary)' }}>
+          Run a Security Test
+        </h3>
+        
+        {/* Step 1: Select MCP */}
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ fontSize: '12px', fontWeight: 500, display: 'block', marginBottom: '8px', color: 'var(--text-secondary)' }}>
+            Step 1: Select an MCP to test
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+            {servers.length > 0 ? (
+              servers.map((server) => {
+                const isGuarded = getIsGuarded(server.name);
+                return (
+                  <button
+                    key={server.name}
+                    onClick={() => setSelectedMCP(server.name)}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: selectedMCP === server.name 
+                        ? '2px solid #22c55e' 
+                        : `1px solid ${isGuarded ? 'rgba(34, 197, 94, 0.3)' : 'rgba(255, 215, 0, 0.3)'}`,
+                      background: selectedMCP === server.name 
+                        ? 'rgba(34, 197, 94, 0.1)' 
+                        : isGuarded ? 'rgba(34, 197, 94, 0.05)' : 'rgba(255, 215, 0, 0.05)',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      fontWeight: selectedMCP === server.name ? 600 : 400,
+                      color: 'var(--text-primary)',
+                      transition: 'all 0.15s ease',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    {isGuarded ? <ShieldIcon size={12} /> : <ShieldOffIcon size={12} />}
+                    {server.name}
+                    <span style={{ 
+                      fontSize: '10px', 
+                      padding: '1px 4px', 
+                      borderRadius: '3px',
+                      background: isGuarded ? 'rgba(34, 197, 94, 0.2)' : 'rgba(255, 215, 0, 0.2)',
+                      color: isGuarded ? 'var(--success)' : 'var(--warning)',
+                      fontWeight: 500,
+                    }}>
+                      {isGuarded ? 'guarded' : 'unguarded'}
+                    </span>
+                  </button>
+                );
+              })
+            ) : (
+              <p style={{ color: 'var(--text-muted)', fontSize: '12px', margin: 0 }}>
+                No MCPs available. Import MCPs from your IDE configuration first.
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Guard Status Notice */}
+        {selectedMCP && (
+          <div 
+            style={{ 
+              marginBottom: '16px',
+              padding: '12px 16px',
+              borderRadius: 'var(--radius-md)',
+              background: selectedMCPIsGuarded ? 'rgba(34, 197, 94, 0.1)' : 'rgba(255, 215, 0, 0.1)',
+              border: `1px solid ${selectedMCPIsGuarded ? 'rgba(34, 197, 94, 0.3)' : 'rgba(255, 215, 0, 0.3)'}`,
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+            }} 
+            className="animate-fade-in"
+          >
+            {selectedMCPIsGuarded ? <ShieldIcon size={18} /> : <ShieldOffIcon size={18} />}
+            <div>
+              <div style={{ fontWeight: 600, fontSize: '13px', color: selectedMCPIsGuarded ? 'var(--success)' : 'var(--warning)' }}>
+                {selectedMCPIsGuarded ? 'Ready to Test' : 'Enable Guarding First'}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                {selectedMCPIsGuarded 
+                  ? 'Run security tests to verify that MCPGuard\'s protections are active. Tests will confirm that malicious operations are blocked while legitimate tool calls succeed.'
+                  : 'This MCP is not guarded. Enable guarding to activate MCPGuard\'s security isolation, then run tests to verify the protection is working.'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Select Test Type */}
+        {selectedMCP && (
+          <div style={{ marginBottom: '16px' }} className="animate-fade-in">
+            <label style={{ fontSize: '12px', fontWeight: 500, display: 'block', marginBottom: '8px', color: 'var(--text-secondary)' }}>
+              Step 2: Choose a test type
+            </label>
+            <TestTypeSelector selectedType={selectedTestType} onSelectType={setSelectedTestType} />
+          </div>
+        )}
+
+        {/* Step 3: Generate Prompt */}
+        {selectedMCP && (
+          <div className="animate-fade-in">
+            <Button variant="primary" onClick={() => setShowModal(true)}>
+              <PlayIcon size={14} />
+              Generate Test Prompt
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* How Testing Works */}
+      <div
+        style={{
+          padding: '16px',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-color)',
+        }}
+      >
+        <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <InfoIcon size={16} />
+          How Security Testing Works
+        </h4>
+        <p style={{ margin: '0 0 12px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          Tests run through MCPGuard's <code style={{ background: 'var(--bg-hover)', padding: '1px 4px', borderRadius: '3px' }}>execute_code</code> tool, which executes code in a secure, isolated Cloudflare Worker environment. The tests verify that:
+        </p>
+        <ul style={{ margin: '0 0 12px', paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          <li><strong>Legitimate tool calls</strong> work correctly through the isolation layer</li>
+          <li><strong>Network requests</strong> to external servers are blocked (prevents data exfiltration)</li>
+          <li><strong>Dangerous code patterns</strong> like eval() are blocked (prevents code injection)</li>
+          <li><strong>Filesystem access</strong> is unavailable (prevents unauthorized file access)</li>
+        </ul>
+        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          Note: Tests only work for guarded MCPs. Enable guarding first to activate MCPGuard's protection layer.
+        </p>
+      </div>
+
+      {/* Test Prompt Modal */}
+      {selectedMCP && (
+        <TestPromptModal
+          isOpen={showModal}
+          onClose={() => setShowModal(false)}
+          mcpName={selectedMCP}
+          testType={selectedTestType}
+          isGuarded={selectedMCPIsGuarded}
+        />
+      )}
+    </div>
+  );
+};
 
 

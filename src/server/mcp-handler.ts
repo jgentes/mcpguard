@@ -47,7 +47,6 @@ export class MCPHandler {
     this.setupHandlers()
   }
 
-
   /**
    * Parse a namespaced tool name back to MCP name and tool name
    * Returns null if not namespaced
@@ -137,7 +136,6 @@ export class MCPHandler {
       // Don't throw - just log and continue
     }
   }
-
 
   private setupHandlers(): void {
     // List available tools
@@ -387,7 +385,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         {
           name: 'disable_mcps',
           description:
-            'Disable MCP servers in your IDE configuration. This prevents the IDE from loading all their tools into the context window unnecessarily, maximizing efficiency and ensuring all tool calls route through MCPGuard\'s secure isolation. Can disable specific MCPs or all MCPs except mcpguard.',
+            "Disable MCP servers in your IDE configuration. This prevents the IDE from loading all their tools into the context window unnecessarily, maximizing efficiency and ensuring all tool calls route through MCPGuard's secure isolation. Can disable specific MCPs or all MCPs except mcpguard.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -522,7 +520,12 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           const isFatal: boolean =
             error.code === 'UNSUPPORTED_CONFIG' ||
             error.code === 'MCP_CONNECTION_ERROR' ||
-            Boolean(error.details && typeof error.details === 'object' && 'fatal' in error.details && (error.details as { fatal?: boolean }).fatal === true)
+            Boolean(
+              error.details &&
+                typeof error.details === 'object' &&
+                'fatal' in error.details &&
+                (error.details as { fatal?: boolean }).fatal === true,
+            )
 
           return {
             content: [
@@ -621,7 +624,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
       const savedConfig = this.configManager.getSavedConfig(mcp_name)
       if (!savedConfig) {
         throw new MCPIsolateError(
-              `No saved configuration found for MCP: ${mcp_name}. Use search_mcp_tools to see available MCPs.`,
+          `No saved configuration found for MCP: ${mcp_name}. Use search_mcp_tools to see available MCPs.`,
           'NOT_FOUND',
           404,
         )
@@ -746,11 +749,12 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         mcpId = existingInstance.mcp_id
         instance = existingInstance
       } else {
-        // Auto-load MCP from saved config
-        const savedConfig = this.configManager.getSavedConfig(
-          validated.mcp_name,
-        )
-        if (!savedConfig) {
+        // Auto-load MCP from config - only guarded (disabled) MCPs should go through MCPGuard
+        // Unguarded MCPs are loaded by the IDE directly and the LLM can call them without MCPGuard
+        const allMCPs = this.configManager.getAllConfiguredMCPs()
+        const mcpEntry = allMCPs[validated.mcp_name]
+
+        if (!mcpEntry) {
           throw new MCPIsolateError(
             `MCP "${validated.mcp_name}" not found in IDE configuration. Use search_mcp_tools to see available MCPs.`,
             'NOT_FOUND',
@@ -763,13 +767,29 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           )
         }
 
+        // Only allow guarded (disabled) MCPs through execute_code
+        // Unguarded MCPs should be called directly by the LLM
+        if (mcpEntry.status === 'active') {
+          throw new MCPIsolateError(
+            `MCP "${validated.mcp_name}" is unguarded and should be called directly by the LLM, not through MCPGuard. To use MCPGuard isolation, first guard this MCP in your IDE configuration.`,
+            'UNGUARDED_MCP',
+            400,
+            {
+              mcp_name: validated.mcp_name,
+              status: 'active',
+              suggestion:
+                'This MCP is not guarded. Either call its tools directly, or guard it first using the VS Code extension or by moving it to _mcpguard_disabled in your IDE config.',
+            },
+          )
+        }
+
+        // Resolve environment variables for the guarded MCP config
+        const resolvedConfig = this.configManager.resolveEnvVarsInObject(
+          mcpEntry.config,
+        ) as MCPConfig
+
         // URL-based MCPs are now supported via StreamableHTTPClientTransport
         // No early rejection needed - they will be handled by the transport layer
-
-        // Resolve environment variables
-        const resolvedConfig = this.configManager.resolveEnvVarsInObject(
-          savedConfig,
-        ) as MCPConfig
 
         logger.info(
           { mcp_name: validated.mcp_name },
@@ -801,14 +821,11 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         } catch (error: unknown) {
           // Re-throw MCPConnectionError with enhanced context
           if (error instanceof MCPConnectionError) {
-            throw new MCPConnectionError(
-              error.message,
-              {
-                mcp_name: validated.mcp_name,
-                original_error: error.details,
-                fatal: true,
-              },
-            )
+            throw new MCPConnectionError(error.message, {
+              mcp_name: validated.mcp_name,
+              original_error: error.details,
+              fatal: true,
+            })
           }
           throw error
         }
@@ -858,19 +875,24 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         errorMessage.includes('Wrangler execution failed') ||
         errorMessage.includes('Wrangler process') ||
         errorMessage.includes('Wrangler dev server') ||
-        Boolean(errorDetails &&
-          typeof errorDetails === 'object' &&
-          ('wrangler_stderr' in errorDetails || 'wrangler_stdout' in errorDetails))
+        Boolean(
+          errorDetails &&
+            typeof errorDetails === 'object' &&
+            ('wrangler_stderr' in errorDetails ||
+              'wrangler_stdout' in errorDetails),
+        )
 
       const isFatal: boolean =
         errorMessage.includes('MCP_CONNECTION_ERROR') ||
         errorMessage.includes('URL-based MCP') ||
         errorMessage.includes('cannot be loaded') ||
         hasWranglerError ||
-        Boolean(errorDetails &&
-          typeof errorDetails === 'object' &&
-          'fatal' in errorDetails &&
-          (errorDetails as { fatal?: boolean }).fatal === true)
+        Boolean(
+          errorDetails &&
+            typeof errorDetails === 'object' &&
+            'fatal' in errorDetails &&
+            (errorDetails as { fatal?: boolean }).fatal === true,
+        )
 
       // Extract Wrangler error details for prominent display
       let wranglerError: {
@@ -999,7 +1021,10 @@ The code runs in an isolated Worker environment with no network access. All MCP 
     const errorLower = error.toLowerCase()
 
     if (errorLower.includes('wrangler')) {
-      if (errorLower.includes('missing entry-point') || errorLower.includes('entry-point')) {
+      if (
+        errorLower.includes('missing entry-point') ||
+        errorLower.includes('entry-point')
+      ) {
         return 'Wrangler configuration error: Missing entry point. This is a fatal error - MCPGuard cannot execute code without a properly configured Worker runtime. Check that src/worker/runtime.ts exists and wrangler.toml is correctly configured.'
       }
       if (errorLower.includes('exited with code')) {
@@ -1363,9 +1388,7 @@ console.log(JSON.stringify(result, null, 2));`
 
   private async handleDisableMCPs(args: unknown) {
     const typedArgs =
-      args && typeof args === 'object'
-        ? (args as { mcp_names?: string[] })
-        : {}
+      args && typeof args === 'object' ? (args as { mcp_names?: string[] }) : {}
     const { mcp_names } = typedArgs
 
     const configPath = this.configManager.getCursorConfigPath()
@@ -1561,14 +1584,11 @@ console.log(JSON.stringify(result, null, 2));`
       } catch (error: unknown) {
         // Re-throw MCPConnectionError with enhanced context
         if (error instanceof MCPConnectionError) {
-          throw new MCPConnectionError(
-            error.message,
-            {
-              mcp_name: mcpName,
-              original_error: error.details,
-              fatal: true,
-            },
-          )
+          throw new MCPConnectionError(error.message, {
+            mcp_name: mcpName,
+            original_error: error.details,
+            fatal: true,
+          })
         }
         throw error
       }
@@ -1622,19 +1642,24 @@ return result;`
         errorMessage.includes('Wrangler execution failed') ||
         errorMessage.includes('Wrangler process') ||
         errorMessage.includes('Wrangler dev server') ||
-        Boolean(errorDetails &&
-          typeof errorDetails === 'object' &&
-          ('wrangler_stderr' in errorDetails || 'wrangler_stdout' in errorDetails))
+        Boolean(
+          errorDetails &&
+            typeof errorDetails === 'object' &&
+            ('wrangler_stderr' in errorDetails ||
+              'wrangler_stdout' in errorDetails),
+        )
 
       const isFatal: boolean =
         errorMessage.includes('MCP_CONNECTION_ERROR') ||
         errorMessage.includes('URL-based MCP') ||
         errorMessage.includes('cannot be loaded') ||
         hasWranglerError ||
-        Boolean(errorDetails &&
-          typeof errorDetails === 'object' &&
-          'fatal' in errorDetails &&
-          (errorDetails as { fatal?: boolean }).fatal === true)
+        Boolean(
+          errorDetails &&
+            typeof errorDetails === 'object' &&
+            'fatal' in errorDetails &&
+            (errorDetails as { fatal?: boolean }).fatal === true,
+        )
 
       return {
         content: [
