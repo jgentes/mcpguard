@@ -68,7 +68,10 @@
     "watch:extension": "esbuild src/extension/index.ts --bundle --outfile=dist/extension/index.js --external:vscode --format=cjs --platform=node --watch",
     "watch:webview": "esbuild src/webview/index.tsx --bundle --outfile=dist/webview/index.js --format=iife --loader:.tsx=tsx --loader:.ts=ts --watch",
     "lint": "biome check src/",
-    "lint:fix": "biome check --apply src/"
+    "lint:fix": "biome check --apply src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
@@ -77,10 +80,12 @@
     "@types/react-dom": "^18.2.0",
     "@types/vscode": "^1.85.0",
     "@types/vscode-webview": "^1.57.0",
+    "@vitest/coverage-v8": "^2.1.0",
     "concurrently": "^8.2.0",
     "esbuild": "^0.27.0",
     "sharp": "^0.34.5",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^2.1.0"
   },
   "dependencies": {
     "react": "^18.2.0",
