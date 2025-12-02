@@ -638,16 +638,15 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
       if (guardStatusChanged) {
         const status = isNowGuarded ? 'guarded' : 'unguarded';
         this._postMessage({ type: 'success', message: `${config.mcpName} is now ${status}` });
+
+        // Only send full settings update if guard status changed
+        // (isGuarded is computed from IDE config, frontend can't know this)
+        const updatedSettings = loadSettingsWithHydration(settingsPath);
+        this._postMessage({ type: 'settings', data: updatedSettings });
       } else {
         this._postMessage({ type: 'success', message: `Configuration for "${config.mcpName}" saved` });
+        // No need to send settings - frontend has optimistically updated
       }
-      
-      // Send updated settings with fresh isGuarded state
-      const updatedSettings = loadSettingsWithHydration(settingsPath);
-      this._postMessage({ type: 'settings', data: updatedSettings });
-      
-      // Refresh MCP list to show updated status
-      await this._sendMCPServers();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       this._postMessage({ type: 'error', message: `Failed to save MCP config: ${message}` });

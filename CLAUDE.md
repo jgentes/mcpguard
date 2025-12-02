@@ -72,14 +72,25 @@ npm run benchmark     # Run GitHub MCP comparison benchmark
    - `runtime.ts`: Parent Worker that uses Worker Loader API to spawn dynamic child Workers
    - Child Workers are generated dynamically with embedded user code and MCP bindings
 
-3. **CLI** (`src/cli/`)
+3. **VSCode Extension** (`vscode-extension/`)
+   - `src/extension/`: Extension backend (Node.js)
+     - `index.ts`: Extension entry point and activation
+     - `webview-provider.ts`: Manages webview panel, message passing, config I/O
+     - `config-exporter.ts`: Exports configs to/from IDE config files
+   - `src/webview/`: Extension frontend (React)
+     - `App.tsx`: Main UI component, manages expansion state
+     - `components.tsx`: Reusable UI components (MCPCard, CollapsibleSection, etc.)
+     - `hooks.ts`: React hooks for state management and message passing
+     - `types.ts`: TypeScript type definitions shared between frontend/backend
+
+4. **CLI** (`src/cli/`)
    - `index.ts`: Interactive CLI for testing MCP loading, code execution, and configuration
 
-4. **Types** (`src/types/`)
+5. **Types** (`src/types/`)
    - `mcp.ts`: MCP-related types (MCPTool, MCPConfig, MCPInstance, etc.)
    - `worker.ts`: Worker-related types (WorkerCode, execution requests)
 
-5. **Utilities** (`src/utils/`)
+6. **Utilities** (`src/utils/`)
    - `config-manager.ts`: Manages MCP configs, imports from IDE config files
    - `validation.ts`: Input validation and security checks for TypeScript code
    - `logger.ts`: Pino-based structured logging
@@ -136,6 +147,41 @@ npm run benchmark     # Run GitHub MCP comparison benchmark
 7. Optionally auto-save config to IDE config file
 
 ## Key Implementation Details
+
+### VSCode Extension Architecture
+
+The VSCode extension uses modern React patterns for optimal UX:
+
+**State Management**:
+- **Optimistic Updates**: Frontend updates UI immediately before backend responds
+  - `hooks.ts:saveMCPConfig()` updates local state instantly
+  - Backend only sends full update if `isGuarded` changed (computed from IDE config)
+  - Eliminates flashing/re-rendering of components
+- **Controlled Components**: MCPCard expansion state managed by parent (App.tsx)
+- **Message Passing**: Extension backend ↔ Webview via `postMessage`/`window.addEventListener`
+
+**Component Hierarchy**:
+```
+App.tsx (expansion state: Set<string>)
+  └─ MCPCard (controlled isExpanded prop)
+      ├─ Header (click handler checks target.closest('[data-config-section]'))
+      └─ Config Sections (when expanded)
+          ├─ CollapsibleSection (data-config-section="true")
+          │   ├─ NetworkConfigSection (local state + optimistic update)
+          │   └─ FileSystemConfigSection (local state + optimistic update)
+          └─ Save buttons wrapped in divs with stopPropagation
+```
+
+**Event Propagation**:
+- CollapsibleSections marked with `data-config-section="true"`
+- MCPCard header checks `target.closest('[data-config-section]')` to ignore clicks in config areas
+- Save buttons wrapped in divs with `onClick={(e) => e.stopPropagation()}`
+- Prevents clicks from bubbling to parent card header
+
+**Performance**:
+- Optimistic updates eliminate ~200-500ms perceived latency
+- No full server list refresh on config save (was causing flashing)
+- React keys stable (`server.name`) to prevent component re-mounting
 
 ### Security Model
 

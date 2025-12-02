@@ -7,8 +7,7 @@
  * - All UI components should follow shadcn design patterns when possible
  */
 
-import type React from 'react'
-import { useCallback, useState } from 'react'
+import React, { useCallback, useState, useRef, useEffect } from 'react'
 import { postMessage } from './hooks'
 import type {
   ConnectionTestResult,
@@ -1276,7 +1275,10 @@ export const Switch: React.FC<SwitchProps> = ({
       role="switch"
       aria-checked={checked}
       disabled={disabled}
-      onClick={() => !disabled && onCheckedChange(!checked)}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!disabled) onCheckedChange(!checked)
+      }}
       style={{
         width: '44px',
         height: '24px',
@@ -1336,7 +1338,10 @@ export const Toggle: React.FC<ToggleProps> = ({
       gap: '12px',
       cursor: 'pointer',
     }}
-    onClick={() => onChange(!enabled)}
+    onClick={(e) => {
+      e.stopPropagation()
+      onChange(!enabled)
+    }}
   >
     <Switch checked={enabled} onCheckedChange={onChange} />
     {(label || description) && (
@@ -1546,14 +1551,19 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
 
   return (
     <div
+      data-config-section="true"
       style={{
         borderRadius: 'var(--radius-md)',
         border: '1px solid var(--border-color)',
         overflow: 'hidden',
       }}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={(e) => {
+          e.stopPropagation()
+          setIsOpen(!isOpen)
+        }}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -1572,6 +1582,7 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
         <div
           style={{ padding: '16px', background: 'var(--bg-primary)' }}
           className="animate-fade-in"
+          onClick={(e) => e.stopPropagation()}
         >
           {children}
         </div>
@@ -1584,6 +1595,260 @@ export const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
 // MCP Configuration Components
 // ====================
 
+/**
+ * Network Configuration Section Component
+ * Self-contained component that manages its own state and saves independently
+ */
+interface NetworkConfigSectionProps {
+  network: MCPSecurityConfig['network']
+  onSave: (network: MCPSecurityConfig['network']) => void
+}
+
+const NetworkConfigSection: React.FC<NetworkConfigSectionProps> = ({
+  network,
+  onSave,
+}) => {
+  const [localNetwork, setLocalNetwork] = useState(network)
+  const [hasChanges, setHasChanges] = useState(false)
+
+  // Update local state when prop changes
+  React.useEffect(() => {
+    setLocalNetwork(network)
+    setHasChanges(false)
+  }, [network])
+
+  const handleChange = (updates: Partial<typeof localNetwork>) => {
+    setLocalNetwork(prev => ({ ...prev, ...updates }))
+    setHasChanges(true)
+  }
+
+  const handleSave = () => {
+    onSave(localNetwork)
+    setHasChanges(false)
+  }
+
+  return (
+    <CollapsibleSection
+      title="Network Access"
+      icon={<NetworkIcon size={16} />}
+      defaultOpen={localNetwork.enabled}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <Toggle
+          enabled={localNetwork.enabled}
+          onChange={(enabled) => handleChange({ enabled })}
+          label="Enable Network Access"
+          description="Allow this MCP to make outbound network requests"
+        />
+
+        {localNetwork.enabled && (
+          <>
+            <div>
+              <label
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  display: 'block',
+                  marginBottom: '8px',
+                }}
+              >
+                Allowed Hosts
+              </label>
+              <TagInput
+                tags={localNetwork.allowlist}
+                onChange={(allowlist) => handleChange({ allowlist })}
+                placeholder="Enter domain and press Enter (e.g., api.github.com)"
+              />
+              <div
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--text-muted)',
+                  marginTop: '4px',
+                }}
+              >
+                Only these hosts will be accessible. Leave empty to block
+                all external requests.
+              </div>
+            </div>
+
+            <Toggle
+              enabled={localNetwork.allowLocalhost}
+              onChange={(allowLocalhost) => handleChange({ allowLocalhost })}
+              label="Allow Localhost"
+              description="Permit requests to localhost and 127.0.0.1"
+            />
+
+            {hasChanges && (
+              <div
+                style={{ display: 'flex', justifyContent: 'flex-end' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    handleSave()
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '11px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--accent)',
+                    background: 'var(--accent)',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    marginTop: '8px',
+                  }}
+                >
+                  <CheckIcon size={12} />
+                  Save
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </CollapsibleSection>
+  )
+}
+
+/**
+ * File System Configuration Section Component
+ * Self-contained component that manages its own state and saves independently
+ */
+interface FileSystemConfigSectionProps {
+  fileSystem: MCPSecurityConfig['fileSystem']
+  onSave: (fileSystem: MCPSecurityConfig['fileSystem']) => void
+}
+
+const FileSystemConfigSection: React.FC<FileSystemConfigSectionProps> = ({
+  fileSystem,
+  onSave,
+}) => {
+  const [localFileSystem, setLocalFileSystem] = useState(fileSystem)
+  const [hasChanges, setHasChanges] = useState(false)
+
+  // Update local state when prop changes
+  React.useEffect(() => {
+    setLocalFileSystem(fileSystem)
+    setHasChanges(false)
+  }, [fileSystem])
+
+  const handleChange = (updates: Partial<typeof localFileSystem>) => {
+    setLocalFileSystem(prev => ({ ...prev, ...updates }))
+    setHasChanges(true)
+  }
+
+  const handleSave = () => {
+    onSave(localFileSystem)
+    setHasChanges(false)
+  }
+
+  return (
+    <CollapsibleSection
+      title="File System Access"
+      icon={<FolderIcon size={16} />}
+      defaultOpen={localFileSystem.enabled}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <Toggle
+          enabled={localFileSystem.enabled}
+          onChange={(enabled) => handleChange({ enabled })}
+          label="Enable File System Access"
+          description="Allow this MCP to access the file system"
+        />
+
+        {localFileSystem.enabled && (
+          <>
+            <div>
+              <label
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  display: 'block',
+                  marginBottom: '8px',
+                }}
+              >
+                Read Paths
+              </label>
+              <TagInput
+                tags={localFileSystem.readPaths}
+                onChange={(readPaths) => handleChange({ readPaths })}
+                placeholder="Enter path and press Enter (e.g., /home/user/projects)"
+              />
+            </div>
+
+            <div>
+              <label
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  display: 'block',
+                  marginBottom: '8px',
+                }}
+              >
+                Write Paths
+              </label>
+              <TagInput
+                tags={localFileSystem.writePaths}
+                onChange={(writePaths) => handleChange({ writePaths })}
+                placeholder="Enter path and press Enter (e.g., /tmp)"
+              />
+              <div
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--warning)',
+                  marginTop: '4px',
+                }}
+              >
+                ⚠️ Write access should be granted carefully
+              </div>
+            </div>
+
+            {hasChanges && (
+              <div
+                style={{ display: 'flex', justifyContent: 'flex-end' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    handleSave()
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '11px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--accent)',
+                    background: 'var(--accent)',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    marginTop: '8px',
+                  }}
+                >
+                  <CheckIcon size={12} />
+                  Save
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </CollapsibleSection>
+  )
+}
+
 interface MCPCardProps {
   server: MCPServerInfo
   config?: MCPSecurityConfig
@@ -1592,6 +1857,8 @@ interface MCPCardProps {
   globalEnabled?: boolean // Whether MCP Guard is globally enabled
   onTestConnection?: (mcpName: string) => void // Callback to test connection
   onViewLogs?: () => void // Callback to open logs
+  isExpanded?: boolean // Controlled expanded state from parent
+  onToggleExpanded?: () => void // Callback to toggle expansion
 }
 
 export const MCPCard: React.FC<MCPCardProps> = ({
@@ -1602,8 +1869,13 @@ export const MCPCard: React.FC<MCPCardProps> = ({
   globalEnabled = true,
   onTestConnection,
   onViewLogs,
+  isExpanded: controlledIsExpanded,
+  onToggleExpanded,
 }) => {
-  const [isExpanded, setIsExpanded] = useState(false)
+  // Use controlled state if provided, otherwise use local state
+  const [localIsExpanded, setLocalIsExpanded] = useState(false)
+  const isExpanded = controlledIsExpanded !== undefined ? controlledIsExpanded : localIsExpanded
+  const setIsExpanded = onToggleExpanded || setLocalIsExpanded
 
   // Initialize config if not exists
   const currentConfig: MCPSecurityConfig = config || {
@@ -1664,7 +1936,19 @@ export const MCPCard: React.FC<MCPCardProps> = ({
           padding: '16px',
           cursor: 'pointer',
         }}
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={(e) => {
+          // Don't toggle if clicking on interactive elements or config sections
+          const target = e.target as HTMLElement
+          if (
+            target.closest('button') ||
+            target.closest('[role="switch"]') ||
+            target.closest('svg') ||
+            target.closest('[data-config-section]')
+          ) {
+            return
+          }
+          setIsExpanded(!isExpanded)
+        }}
       >
         <div
           style={{
@@ -1866,6 +2150,7 @@ export const MCPCard: React.FC<MCPCardProps> = ({
             gap: '16px',
           }}
           className="animate-fade-in"
+          onClick={(e) => e.stopPropagation()}
         >
           {/* Auth Failed Error - show prominently */}
           {server.assessmentError?.type === 'auth_failed' && (
@@ -2365,246 +2650,16 @@ export const MCPCard: React.FC<MCPCardProps> = ({
           )}
 
           {/* Network Configuration */}
-          <CollapsibleSection
-            title="Network Access"
-            icon={<NetworkIcon size={16} />}
-            defaultOpen={currentConfig.network.enabled}
-          >
-            <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
-            >
-              <Toggle
-                enabled={currentConfig.network.enabled}
-                onChange={(enabled) =>
-                  updateConfig({
-                    network: { ...currentConfig.network, enabled },
-                  })
-                }
-                label="Enable Network Access"
-                description="Allow this MCP to make outbound network requests"
-              />
-
-              {currentConfig.network.enabled && (
-                <>
-                  <div>
-                    <label
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        display: 'block',
-                        marginBottom: '8px',
-                      }}
-                    >
-                      Allowed Hosts
-                    </label>
-                    <TagInput
-                      tags={currentConfig.network.allowlist}
-                      onChange={(allowlist) =>
-                        updateConfig({
-                          network: { ...currentConfig.network, allowlist },
-                        })
-                      }
-                      placeholder="Enter domain and press Enter (e.g., api.github.com)"
-                    />
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--text-muted)',
-                        marginTop: '4px',
-                      }}
-                    >
-                      Only these hosts will be accessible. Leave empty to block
-                      all external requests.
-                    </div>
-                  </div>
-
-                  <Toggle
-                    enabled={currentConfig.network.allowLocalhost}
-                    onChange={(allowLocalhost) =>
-                      updateConfig({
-                        network: { ...currentConfig.network, allowLocalhost },
-                      })
-                    }
-                    label="Allow Localhost"
-                    description="Permit requests to localhost and 127.0.0.1"
-                  />
-                </>
-              )}
-            </div>
-          </CollapsibleSection>
+          <NetworkConfigSection
+            network={currentConfig.network}
+            onSave={(network) => updateConfig({ network })}
+          />
 
           {/* File System Configuration */}
-          <CollapsibleSection
-            title="File System Access"
-            icon={<FolderIcon size={16} />}
-            defaultOpen={currentConfig.fileSystem.enabled}
-          >
-            <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
-            >
-              <Toggle
-                enabled={currentConfig.fileSystem.enabled}
-                onChange={(enabled) =>
-                  updateConfig({
-                    fileSystem: { ...currentConfig.fileSystem, enabled },
-                  })
-                }
-                label="Enable File System Access"
-                description="Allow this MCP to access the file system"
-              />
-
-              {currentConfig.fileSystem.enabled && (
-                <>
-                  <div>
-                    <label
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        display: 'block',
-                        marginBottom: '8px',
-                      }}
-                    >
-                      Read Paths
-                    </label>
-                    <TagInput
-                      tags={currentConfig.fileSystem.readPaths}
-                      onChange={(readPaths) =>
-                        updateConfig({
-                          fileSystem: {
-                            ...currentConfig.fileSystem,
-                            readPaths,
-                          },
-                        })
-                      }
-                      placeholder="Enter path and press Enter (e.g., /home/user/projects)"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        display: 'block',
-                        marginBottom: '8px',
-                      }}
-                    >
-                      Write Paths
-                    </label>
-                    <TagInput
-                      tags={currentConfig.fileSystem.writePaths}
-                      onChange={(writePaths) =>
-                        updateConfig({
-                          fileSystem: {
-                            ...currentConfig.fileSystem,
-                            writePaths,
-                          },
-                        })
-                      }
-                      placeholder="Enter path and press Enter (e.g., /tmp)"
-                    />
-                    <div
-                      style={{
-                        fontSize: '11px',
-                        color: 'var(--warning)',
-                        marginTop: '4px',
-                      }}
-                    >
-                      ⚠️ Write access should be granted carefully
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </CollapsibleSection>
-
-          {/* Resource Limits */}
-          <CollapsibleSection
-            title="Resource Limits"
-            icon={<ClockIcon size={16} />}
-          >
-            <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
-            >
-              <div>
-                <label
-                  style={{
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    display: 'block',
-                    marginBottom: '8px',
-                  }}
-                >
-                  Max Execution Time (ms)
-                </label>
-                <Input
-                  type="number"
-                  value={currentConfig.resourceLimits.maxExecutionTimeMs.toString()}
-                  onChange={(value) =>
-                    updateConfig({
-                      resourceLimits: {
-                        ...currentConfig.resourceLimits,
-                        maxExecutionTimeMs: parseInt(value) || 30000,
-                      },
-                    })
-                  }
-                  placeholder="30000"
-                />
-              </div>
-
-              <div>
-                <label
-                  style={{
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    display: 'block',
-                    marginBottom: '8px',
-                  }}
-                >
-                  Max Memory (MB)
-                </label>
-                <Input
-                  type="number"
-                  value={currentConfig.resourceLimits.maxMemoryMB.toString()}
-                  onChange={(value) =>
-                    updateConfig({
-                      resourceLimits: {
-                        ...currentConfig.resourceLimits,
-                        maxMemoryMB: parseInt(value) || 128,
-                      },
-                    })
-                  }
-                  placeholder="128"
-                />
-              </div>
-
-              <div>
-                <label
-                  style={{
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    display: 'block',
-                    marginBottom: '8px',
-                  }}
-                >
-                  Max MCP Calls per Execution
-                </label>
-                <Input
-                  type="number"
-                  value={currentConfig.resourceLimits.maxMCPCalls.toString()}
-                  onChange={(value) =>
-                    updateConfig({
-                      resourceLimits: {
-                        ...currentConfig.resourceLimits,
-                        maxMCPCalls: parseInt(value) || 100,
-                      },
-                    })
-                  }
-                  placeholder="100"
-                />
-              </div>
-            </div>
-          </CollapsibleSection>
+          <FileSystemConfigSection
+            fileSystem={currentConfig.fileSystem}
+            onSave={(fileSystem) => updateConfig({ fileSystem })}
+          />
 
           {/* Configuration Details */}
           <CollapsibleSection
@@ -2853,15 +2908,6 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                 Delete MCP
               </button>
             </div>
-
-            {/* Save */}
-            <Button
-              variant="primary"
-              onClick={() => onConfigChange(currentConfig)}
-            >
-              <CheckIcon size={14} />
-              Save Configuration
-            </Button>
           </div>
         </div>
       )}
@@ -4297,13 +4343,6 @@ export const TestingTab: React.FC<TestingTabProps> = ({
       description:
         'No direct filesystem access. Workers run in a sandboxed environment.',
       color: '#f59e0b',
-    },
-    {
-      icon: <ClockIcon size={20} />,
-      title: 'Resource Limits',
-      description:
-        'Execution time, memory, and MCP call limits prevent resource exhaustion attacks.',
-      color: '#8b5cf6',
     },
   ]
 

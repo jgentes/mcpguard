@@ -49,6 +49,24 @@ export function useSettings() {
   }, []);
 
   const saveMCPConfig = useCallback((config: MCPSecurityConfig) => {
+    // Optimistically update local settings state immediately
+    setSettings(prev => {
+      const existingIndex = prev.mcpConfigs.findIndex(c => c.id === config.id || c.mcpName === config.mcpName);
+      const newConfigs = [...prev.mcpConfigs];
+
+      if (existingIndex >= 0) {
+        newConfigs[existingIndex] = config;
+      } else {
+        newConfigs.push(config);
+      }
+
+      return {
+        ...prev,
+        mcpConfigs: newConfigs,
+      };
+    });
+
+    // Send to backend
     postMessage({ type: 'saveMCPConfig', data: config });
   }, []);
 
