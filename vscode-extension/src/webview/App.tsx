@@ -287,6 +287,7 @@ export const App: React.FC = () => {
             isAssessing={isAssessingTokens}
             globalEnabled={settings.enabled}
             servers={sortedServers}
+            mcpConfigs={settings.mcpConfigs}
             contextWindowSize={settings.contextWindowSize}
             onContextWindowChange={(size) => {
               saveSettings({ ...settings, contextWindowSize: size });

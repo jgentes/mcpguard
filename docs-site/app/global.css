@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import 'fumadocs-ui/style.css';
+
+:root {
+  --fd-primary: 142 76% 36%;
+  --fd-background: 0 0% 100%;
+  --fd-foreground: 0 0% 3.9%;
+  --fd-muted: 0 0% 96.1%;
+  --fd-muted-foreground: 0 0% 45.1%;
+  --fd-accent: 142 76% 96%;
+  --fd-accent-foreground: 142 76% 36%;
+}
+
+.dark {
+  --fd-primary: 142 69% 58%;
+  --fd-background: 0 0% 3.9%;
+  --fd-foreground: 0 0% 98%;
+  --fd-muted: 0 0% 14.9%;
+  --fd-muted-foreground: 0 0% 63.9%;
+  --fd-accent: 142 76% 15%;
+  --fd-accent-foreground: 142 69% 58%;
+}

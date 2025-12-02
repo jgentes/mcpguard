@@ -248,6 +248,7 @@ interface TokenSavingsBadgeProps {
   isAssessing: boolean;
   globalEnabled: boolean;
   servers?: MCPServerInfo[];
+  mcpConfigs?: MCPSecurityConfig[];
   contextWindowSize?: number;
   onContextWindowChange?: (size: number) => void;
 }
@@ -255,17 +256,20 @@ interface TokenSavingsBadgeProps {
 // Default context window size (200k tokens - Claude/GPT-4 standard)
 const DEFAULT_CONTEXT_WINDOW_SIZE = 200000;
 
-// Context window best practices article
-const CONTEXT_WINDOW_ARTICLE_URL = 'https://www.mckinsey.com/featured-insights/mckinsey-explainers/what-is-a-context-window';
+// MCPGuard's consolidated tool baseline (~500 tokens for all MCPGuard tools)
+const MCPGUARD_BASELINE_TOKENS = 500;
+
+// Anthropic's article on code execution with MCP and context efficiency
+const CONTEXT_WINDOW_ARTICLE_URL = 'https://www.anthropic.com/engineering/code-execution-with-mcp';
 
 // Get status based on total MCP tokens relative to context window
-// Based on research: MCP tools should ideally use <10% of context window
-// to avoid degrading LLM reasoning quality
+// Based on Anthropic research: MCP tools should use minimal context
+// to avoid degrading LLM reasoning quality - code execution can reduce by 98%+
 const getTokenStatus = (tokens: number, contextWindowSize: number): { label: string; color: string; severity: 'low' | 'high' | 'critical' } => {
   const percentage = (tokens / contextWindowSize) * 100;
-  if (percentage < 5) return { label: 'Excellent', color: '#22c55e', severity: 'low' };
-  if (percentage < 10) return { label: 'Good', color: '#84cc16', severity: 'low' };
-  if (percentage < 15) return { label: 'High', color: '#f97316', severity: 'high' };
+  if (percentage < 2.5) return { label: 'Excellent', color: '#22c55e', severity: 'low' };
+  if (percentage < 5) return { label: 'Good', color: '#84cc16', severity: 'low' };
+  if (percentage < 10) return { label: 'High', color: '#f97316', severity: 'high' };
   return { label: 'Critical', color: '#ef4444', severity: 'critical' };
 };
 
@@ -307,6 +311,7 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
   isAssessing,
   globalEnabled,
   servers = [],
+  mcpConfigs = [],
   contextWindowSize = DEFAULT_CONTEXT_WINDOW_SIZE,
   onContextWindowChange
 }) => {
@@ -316,6 +321,12 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
 
   // Use configured context window size
   const effectiveContextWindow = contextWindowSize || DEFAULT_CONTEXT_WINDOW_SIZE;
+
+  // Helper to check if an MCP is guarded
+  const isGuarded = (mcpName: string): boolean => {
+    const config = mcpConfigs.find(c => c.mcpName === mcpName);
+    return config?.isGuarded ?? false;
+  };
 
   // Handle context window input submit (value is in K, so 200 = 200k)
   const handleContextSubmit = () => {
@@ -393,19 +404,43 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
   }
 
   // Calculate total tokens and MCP breakdown
-  const mcpsWithTokens = servers
+  // All MCPs with token data, marking which are guarded
+  const allMcpsWithTokens = servers
     .filter(s => s.tokenMetrics?.estimatedTokens)
     .map((s, index) => ({
       name: s.name,
       tokens: s.tokenMetrics!.estimatedTokens,
       color: getMCPColor(s.name, index),
       toolCount: s.tokenMetrics!.toolCount,
+      isGuarded: globalEnabled && isGuarded(s.name),
     }))
     .sort((a, b) => b.tokens - a.tokens); // Sort by tokens descending
 
-  const totalTokens = mcpsWithTokens.reduce((sum, mcp) => sum + mcp.tokens, 0);
-  const contextPercentage = (totalTokens / effectiveContextWindow) * 100;
-  const status = getTokenStatus(totalTokens, effectiveContextWindow);
+  // Split into guarded and unguarded
+  const unguardedMcps = allMcpsWithTokens.filter(m => !m.isGuarded);
+  const guardedMcps = allMcpsWithTokens.filter(m => m.isGuarded);
+  
+  // Calculate totals
+  const unguardedTokens = unguardedMcps.reduce((sum, mcp) => sum + mcp.tokens, 0);
+  const guardedTokensOriginal = guardedMcps.reduce((sum, mcp) => sum + mcp.tokens, 0);
+  const hasGuardedMcps = guardedMcps.length > 0 && globalEnabled;
+
+  // Actual context usage: unguarded at full size + MCPGuard baseline (if any guarded)
+  const actualTokens = unguardedTokens + (hasGuardedMcps ? MCPGUARD_BASELINE_TOKENS : 0);
+  
+  // Total tokens for bar proportions: show ALL MCPs at original size
+  // This lets us visualize the "savings" - guarded MCPs shown but marked as consolidated
+  const totalTokensForBar = unguardedTokens + guardedTokensOriginal;
+  
+  // Status based on ACTUAL usage (what's really consuming context)
+  const contextPercentage = (actualTokens / effectiveContextWindow) * 100;
+  const status = getTokenStatus(actualTokens, effectiveContextWindow);
+  
+  // For display, use actual tokens
+  const totalTokens = actualTokens;
+  
+  // All MCPs shown in bar (both guarded and unguarded)
+  const mcpsWithTokens = allMcpsWithTokens;
 
   return (
     <div
@@ -427,7 +462,7 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
           </span>
           <button
             onClick={openContextArticle}
-            title="Learn about context windows and LLM performance"
+            title="Learn how MCPGuard improves context efficiency (Anthropic Engineering)"
             style={{
               background: 'transparent',
               border: 'none',
@@ -523,7 +558,8 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
         </div>
       </div>
 
-      {/* Progress Bar - shows relative MCP sizes, total width = 100% */}
+      {/* Progress Bar - shows all MCPs proportionally */}
+      {/* Guarded: green outline, Unguarded: yellow outline */}
       <div
         style={{
           height: '28px',
@@ -531,14 +567,19 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
           background: 'var(--bg-primary)',
           overflow: 'hidden',
           position: 'relative',
-          border: '1px solid var(--border-color)',
         }}
       >
-        {/* MCP Segments - fill entire bar proportionally */}
+        {/* MCP Segments */}
         <div style={{ display: 'flex', height: '100%', width: '100%' }}>
           {mcpsWithTokens.map((mcp, index) => {
-            const segmentWidth = totalTokens > 0 ? (mcp.tokens / totalTokens) * 100 : 0;
+            // Use totalTokensForBar so all MCPs are visible at their original proportions
+            const segmentWidth = totalTokensForBar > 0 ? (mcp.tokens / totalTokensForBar) * 100 : 0;
             const isHovered = hoveredMCP === mcp.name;
+            const isLast = index === mcpsWithTokens.length - 1;
+            
+            // Colors matching the status boxes
+            const GUARDED_GREEN = '#22c55e';
+            const UNGUARDED_YELLOW = '#eab308';
             
             return (
               <div
@@ -548,34 +589,55 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
                 style={{
                   width: `${segmentWidth}%`,
                   height: '100%',
-                  background: mcp.color,
+                  // Guarded: green background/border, Unguarded: yellow background/border
+                  background: mcp.isGuarded 
+                    ? 'rgba(34, 197, 94, 0.15)' 
+                    : 'rgba(234, 179, 8, 0.25)',
                   opacity: isHovered ? 1 : 0.85,
                   cursor: 'pointer',
                   position: 'relative',
-                  transition: 'opacity 0.15s ease',
-                  borderRight: index < mcpsWithTokens.length - 1 ? '1px solid rgba(0,0,0,0.2)' : 'none',
+                  transition: 'all 0.15s ease',
+                  // Colored borders all around each segment
+                  borderTop: `2px solid ${mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW}`,
+                  borderBottom: `2px solid ${mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW}`,
+                  borderLeft: index === 0 ? `2px solid ${mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW}` : 'none',
+                  borderRight: isLast ? `2px solid ${mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW}` : '1px solid rgba(0,0,0,0.3)',
+                  borderRadius: index === 0 ? '4px 0 0 4px' : (isLast ? '0 4px 4px 0' : '0'),
+                  boxSizing: 'border-box',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   overflow: 'hidden',
                 }}
-                title={`${mcp.name}: ${formatNumber(mcp.tokens)} tokens (${mcp.toolCount} tools)`}
+                title={mcp.isGuarded 
+                  ? `${mcp.name}: ${formatNumber(mcp.tokens)} tokens → guarded (consolidated to ~${formatNumber(MCPGUARD_BASELINE_TOKENS)} shared)`
+                  : `${mcp.name}: ${formatNumber(mcp.tokens)} tokens (${mcp.toolCount} tools) - unguarded`}
               >
-                {/* Show name if segment is wide enough */}
-                {segmentWidth > 15 && (
+                {/* Show name and icon */}
+                {segmentWidth > 12 && (
                   <span
                     style={{
                       fontSize: '11px',
                       fontWeight: 600,
-                      color: 'white',
-                      textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+                      color: mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW,
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       padding: '0 6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
                     }}
                   >
+                    {mcp.isGuarded && <ShieldIcon size={12} className={undefined} />}
+                    {!mcp.isGuarded && <ShieldOffIcon size={12} className={undefined} />}
                     {mcp.name}
+                  </span>
+                )}
+                {/* Small icons for narrow segments */}
+                {segmentWidth <= 12 && segmentWidth > 3 && (
+                  <span style={{ color: mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW }}>
+                    {mcp.isGuarded ? <ShieldIcon size={10} className={undefined} /> : <ShieldOffIcon size={10} className={undefined} />}
                   </span>
                 )}
               </div>
@@ -583,7 +645,7 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
           })}
         </div>
 
-        {/* Total token count overlay */}
+        {/* Total token count overlay - shows ACTUAL usage */}
         <div
           style={{
             position: 'absolute',
@@ -622,8 +684,42 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
             {(() => {
               const mcp = mcpsWithTokens.find(m => m.name === hoveredMCP);
               if (!mcp) return null;
-              const mcpPercent = totalTokens > 0 ? ((mcp.tokens / totalTokens) * 100).toFixed(0) : '0';
+              const mcpBarPercent = totalTokensForBar > 0 ? ((mcp.tokens / totalTokensForBar) * 100).toFixed(0) : '0';
               const mcpContextPercent = ((mcp.tokens / effectiveContextWindow) * 100).toFixed(2);
+              
+              // Colors matching status boxes
+              const GUARDED_GREEN = '#22c55e';
+              const UNGUARDED_YELLOW = '#eab308';
+              
+              // Display for guarded MCP
+              if (mcp.isGuarded) {
+                return (
+                  <>
+                    <span
+                      style={{
+                        width: '10px',
+                        height: '10px',
+                        borderRadius: '2px',
+                        background: 'rgba(34, 197, 94, 0.2)',
+                        border: `1px solid ${GUARDED_GREEN}`,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <ShieldIcon size={12} className={undefined} />
+                    <span style={{ fontWeight: 600, color: GUARDED_GREEN }}>{mcp.name}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>·</span>
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      {formatNumber(mcp.tokens)} → ~{formatNumber(Math.round(MCPGUARD_BASELINE_TOKENS / guardedMcps.length))} tokens
+                    </span>
+                    <span style={{ color: 'var(--text-muted)' }}>·</span>
+                    <span>{mcp.toolCount} tools</span>
+                    <span style={{ color: 'var(--text-muted)' }}>·</span>
+                    <span style={{ color: GUARDED_GREEN, fontWeight: 500 }}>protected</span>
+                  </>
+                );
+              }
+              
+              // Display for unguarded MCP
               return (
                 <>
                   <span
@@ -641,9 +737,9 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
                   <span style={{ color: 'var(--text-muted)' }}>·</span>
                   <span>{mcp.toolCount} tools</span>
                   <span style={{ color: 'var(--text-muted)' }}>·</span>
-                  <span style={{ color: mcp.color, fontWeight: 600 }}>{mcpPercent}%</span>
+                  <span style={{ color: mcp.color, fontWeight: 600 }}>{mcpBarPercent}%</span>
                   <span style={{ color: 'var(--text-muted)' }}>·</span>
-                  <span style={{ color: 'var(--text-muted)' }}>{mcpContextPercent}% of context</span>
+                  <span style={{ color: UNGUARDED_YELLOW, fontWeight: 500 }}>unguarded</span>
                 </>
               );
             })()}
@@ -651,7 +747,12 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', fontSize: '10px' }}>
             {mcpsWithTokens.map(mcp => {
-              const mcpPercent = totalTokens > 0 ? ((mcp.tokens / totalTokens) * 100).toFixed(0) : '0';
+              const mcpBarPercent = totalTokensForBar > 0 ? ((mcp.tokens / totalTokensForBar) * 100).toFixed(0) : '0';
+              
+              // Colors matching status boxes
+              const GUARDED_GREEN = '#22c55e';
+              const UNGUARDED_YELLOW = '#eab308';
+              
               return (
                 <div 
                   key={mcp.name}
@@ -661,25 +762,35 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
                     gap: '4px',
                     padding: '3px 8px',
                     borderRadius: '4px',
-                    background: 'var(--bg-primary)',
-                    border: '1px solid var(--border-color)',
+                    background: mcp.isGuarded 
+                      ? 'rgba(34, 197, 94, 0.1)' 
+                      : 'rgba(234, 179, 8, 0.1)',
+                    border: `1px solid ${mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW}`,
                     cursor: 'pointer',
                   }}
                   onMouseEnter={() => setHoveredMCP(mcp.name)}
                   onMouseLeave={() => setHoveredMCP(null)}
                 >
-                  <span
-                    style={{
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '2px',
-                      background: mcp.color,
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{mcp.name}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>{formatCompact(mcp.tokens)}</span>
-                  <span style={{ color: mcp.color, fontWeight: 600 }}>{mcpPercent}%</span>
+                  {mcp.isGuarded ? (
+                    <ShieldIcon size={10} className={undefined} />
+                  ) : (
+                    <ShieldOffIcon size={10} className={undefined} />
+                  )}
+                  <span style={{ 
+                    color: mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW, 
+                    fontWeight: 500 
+                  }}>
+                    {mcp.name}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {formatCompact(mcp.tokens)}
+                  </span>
+                  <span style={{ 
+                    color: mcp.isGuarded ? GUARDED_GREEN : UNGUARDED_YELLOW, 
+                    fontWeight: 600 
+                  }}>
+                    {mcpBarPercent}%
+                  </span>
                 </div>
               );
             })}
@@ -687,7 +798,37 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
         )}
       </div>
 
-      {/* Impact Warning - based on research that >10% context usage degrades LLM performance */}
+      {/* Potential Savings - show what could be saved by guarding unguarded MCPs */}
+      {unguardedMcps.length > 0 && unguardedTokens > MCPGUARD_BASELINE_TOKENS && (
+        <div
+          style={{
+            marginTop: '10px',
+            padding: '8px 12px',
+            borderRadius: '4px',
+            background: 'rgba(234, 179, 8, 0.1)',
+            border: '1px solid rgba(234, 179, 8, 0.3)',
+            fontSize: '11px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <ZapIcon size={14} className={undefined} />
+          <span style={{ color: 'var(--text-secondary)' }}>
+            Guard {unguardedMcps.length} MCP{unguardedMcps.length === 1 ? '' : 's'} for{' '}
+            <span style={{ color: '#eab308', fontWeight: 600 }}>
+              {Math.round((1 - MCPGUARD_BASELINE_TOKENS / unguardedTokens) * 100)}%
+            </span>
+            {' '}reduction in token usage{' '}
+            <span style={{ color: 'var(--text-muted)' }}>
+              ({formatNumber(unguardedTokens - MCPGUARD_BASELINE_TOKENS)} tokens)
+            </span>
+          </span>
+        </div>
+      )}
+
+      {/* Impact Warning - based on Anthropic research that excessive tool definitions degrade LLM performance */}
       {status.severity !== 'low' && (
         <div
           style={{
@@ -709,14 +850,21 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
               {status.severity === 'critical' ? 'High impact on LLM performance. ' : 'Notable context consumption. '}
             </span>
             {status.severity === 'critical' 
-              ? 'Research shows context usage above 15% can significantly degrade LLM reasoning quality and accuracy.'
-              : 'MCP tools are using a notable portion of context. Consider using MCPGuard for on-demand loading.'}
+              ? 'Context usage above 10% can significantly degrade LLM reasoning quality. '
+              : 'MCP tools are using a notable portion of context. '}
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); openContextArticle(); }}
+              style={{ color: 'var(--accent)', textDecoration: 'underline' }}
+            >
+              Learn more
+            </a>
           </div>
         </div>
       )}
 
-      {/* Token Savings Info (if guarded) */}
-      {tokenSavings && tokenSavings.tokensSaved > 0 && (
+      {/* Active Token Savings Info (if guarded) */}
+      {hasGuardedMcps && guardedTokensOriginal > MCPGUARD_BASELINE_TOKENS && (
         <div
           style={{
             marginTop: '10px',
@@ -732,13 +880,14 @@ export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({
         >
           <SparklesIcon size={14} className={undefined} />
           <span style={{ color: 'var(--text-secondary)' }}>
-            MCPGuard saves
-          </span>
-          <span style={{ color: '#22c55e', fontWeight: 600 }}>
-            {formatNumber(tokenSavings.tokensSaved)} tokens
-          </span>
-          <span style={{ color: 'var(--text-muted)' }}>
-            ({Math.round((1 - tokenSavings.mcpGuardTokens / tokenSavings.totalTokensWithoutGuard) * 100)}% reduction)
+            MCPGuard achieving{' '}
+            <span style={{ color: '#22c55e', fontWeight: 600 }}>
+              {Math.round((1 - MCPGUARD_BASELINE_TOKENS / guardedTokensOriginal) * 100)}%
+            </span>
+            {' '}reduction{' '}
+            <span style={{ color: 'var(--text-muted)' }}>
+              ({formatNumber(guardedTokensOriginal - MCPGUARD_BASELINE_TOKENS)} tokens from {guardedMcps.length} guarded MCP{guardedMcps.length === 1 ? '' : 's'})
+            </span>
           </span>
         </div>
       )}

@@ -170,6 +170,7 @@ function loadCursorConfig(): MCPServerInfo[] {
         command?: string;
         args?: string[];
         url?: string;
+        headers?: Record<string, string>;
         env?: Record<string, string>;
         disabled?: boolean;
       }>;
@@ -177,6 +178,7 @@ function loadCursorConfig(): MCPServerInfo[] {
         command?: string;
         args?: string[];
         url?: string;
+        headers?: Record<string, string>;
         env?: Record<string, string>;
       }>;
     } | null;
@@ -194,6 +196,7 @@ function loadCursorConfig(): MCPServerInfo[] {
           command: serverConfig.command,
           args: serverConfig.args,
           url: serverConfig.url,
+          headers: serverConfig.headers,
           env: serverConfig.env,
           source: 'cursor',
           enabled: true, // Active MCPs are enabled
@@ -212,6 +215,7 @@ function loadCursorConfig(): MCPServerInfo[] {
           command: serverConfig.command,
           args: serverConfig.args,
           url: serverConfig.url,
+          headers: serverConfig.headers,
           env: serverConfig.env,
           source: 'cursor',
           enabled: false, // Disabled MCPs - guarded by MCPGuard
@@ -316,6 +320,16 @@ export function getPrimaryIDEConfigPath(): string | null {
   if (copilotPath) return copilotPath;
   
   return null;
+}
+
+/**
+ * Get config path for a specific IDE source
+ */
+export function getIDEConfigPath(source: 'claude' | 'copilot' | 'cursor' | 'unknown'): string | null {
+  if (source === 'unknown') {
+    return getPrimaryIDEConfigPath();
+  }
+  return findIDEConfigPath(source);
 }
 
 /**

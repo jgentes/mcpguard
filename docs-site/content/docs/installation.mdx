@@ -1,0 +1,135 @@
+---
+title: Installation
+description: Get started with MCP Guard using the VS Code extension or npx command.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# Installation
+
+MCP Guard can be installed in two ways:
+1. **VS Code Extension** (Recommended) - Visual interface for managing MCP security
+2. **npx Command** - Quick setup for Cursor, Claude Code, or GitHub Copilot
+
+## Prerequisites
+
+- [Node.js 20+](https://nodejs.org/) installed on your system
+
+## VS Code Extension (Recommended)
+
+The VS Code extension provides a visual interface for managing your MCP servers and their security settings.
+
+<Steps>
+
+### Install the Extension
+
+1. Open VS Code
+2. Go to Extensions (`Ctrl+Shift+X` / `Cmd+Shift+X`)
+3. Search for "MCP Guard"
+4. Click **Install**
+
+Or install directly from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=forgedapps.mcpguard).
+
+### Open MCP Guard
+
+Click the **shield icon** 🛡️ in the activity bar (left sidebar) to open the MCP Guard panel.
+
+### Auto-Discovery
+
+Your MCP servers are automatically imported from:
+- Claude Code configuration
+- Cursor configuration  
+- GitHub Copilot configuration
+
+### Enable Protection
+
+Toggle protection **on** for any MCP you want to secure. Configure network, file system, and resource settings as needed.
+
+</Steps>
+
+<Callout type="tip" title="Quick Access">
+  Use `Ctrl+Shift+P` → "MCP Guard: Open Settings" to open the panel anytime.
+</Callout>
+
+## npx Command (Quick Setup)
+
+For users of Cursor, Claude Code, or GitHub Copilot, you can set up MCP Guard directly in your IDE configuration.
+
+<Steps>
+
+### Add MCPGuard to Your IDE Config
+
+<Tabs items={['One-Click Install', 'Manual Configuration']}>
+  <Tab value="One-Click Install">
+    Click the button below to install MCPGuard in Cursor:
+    
+    [![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=mcpguard&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIm1jcGd1YXJkIl19)
+  </Tab>
+  <Tab value="Manual Configuration">
+    Add to your IDE's MCP configuration file:
+
+    ```json
+    {
+      "mcpServers": {
+        "mcpguard": {
+          "command": "npx",
+          "args": ["-y", "mcpguard"]
+        }
+      }
+    }
+    ```
+
+    **Configuration file locations:**
+    - **Cursor**: `~/.cursor/mcp.jsonc` (or `%APPDATA%\Cursor\User\globalStorage\mcp.jsonc` on Windows)
+    - **Claude Code**: `~/.config/claude-code/mcp.jsonc` (or `%APPDATA%\Claude Code\User\globalStorage\mcp.jsonc` on Windows)
+    - **GitHub Copilot**: `~/.github/copilot/mcp.jsonc` (or `%APPDATA%\GitHub Copilot\mcp.jsonc` on Windows)
+  </Tab>
+</Tabs>
+
+### Disable Existing MCPs (Recommended)
+
+To maximize efficiency and security, disable any existing MCPs in your IDE configuration.
+
+**Why disable?**
+- ⚡ **Efficiency**: Without disabling, your IDE loads all MCP tools into the context window, wasting tokens. MCPGuard only loads tools lazily when you actually use them.
+- 🔒 **Security**: Ensures all tool calls route through MCPGuard's secure isolation instead of being called directly.
+
+**How to disable:**
+- **Option 1**: Ask your LLM: "Disable all MCPs except mcpguard in my IDE configuration"
+- **Option 2**: Manually comment out or remove other MCP entries in your IDE's MCP config file
+
+### Restart Your IDE
+
+Restart your IDE for changes to take effect.
+
+### Done!
+
+MCPGuard automatically:
+- Discovers all other MCPs configured in your IDE (even disabled ones)
+- Routes all tool calls through secure Worker isolation
+- Lazy-loads MCPs when their tools are actually used
+
+</Steps>
+
+## How Transparent Proxy Mode Works
+
+MCPGuard automatically:
+
+1. **Discovers** all MCPs configured in your IDE (Cursor, Claude Code, or GitHub Copilot)
+2. **Lazy-loads** tool schemas only when tools are actually called (not upfront)
+3. **Routes** all tool calls through secure Worker isolation
+4. **Auto-loads** MCPs when their tools are first used
+
+**Example:** If you have `github` MCP configured, MCPGuard will:
+- When the LLM calls `github::search_repositories`, MCPGuard automatically loads the GitHub MCP schema and executes the call in isolation
+- All results are returned transparently - the LLM doesn't need to know about the isolation layer
+- Tool schemas are cached after first use for faster subsequent calls
+
+## Next Steps
+
+- [Learn how MCP Guard works](/docs/how-it-works)
+- [Configure the VS Code extension](/docs/vscode-extension)
+- [Use the CLI for testing](/docs/cli)
+

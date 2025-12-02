@@ -94,7 +94,8 @@ function stopMCPGuardServer(): void {
  * Extension activation
  */
 export function activate(context: vscode.ExtensionContext): void {
-  console.log('MCP Guard extension activated');
+  console.log('MCP Guard extension activated - build v2');
+  console.log('MCP Guard: Extension path:', context.extensionPath);
 
   // Spawn the mcpguard MCP server
   mcpServerProcess = spawnMCPGuardServer(context);

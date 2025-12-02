@@ -1,0 +1,217 @@
+---
+title: CLI Usage
+description: Use MCP Guard from the command line for testing and development.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# CLI Usage
+
+MCP Guard includes an interactive CLI for testing MCP servers and executing code in isolation.
+
+## Starting the CLI
+
+```bash
+# Using npx (no installation required)
+npx mcpguard
+
+# Or if installed locally
+npm run cli
+```
+
+You'll see the interactive prompt:
+
+```
+╔═══════════════════════════════════════════════════════════╗
+║              MCP Guard - Interactive CLI                  ║
+╚═══════════════════════════════════════════════════════════╝
+
+Type "help" for available commands.
+Type "exit" to quit.
+
+mcpguard>
+```
+
+## Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `load` | Load an MCP server into an isolated Worker |
+| `execute` | Execute TypeScript code against a loaded MCP |
+| `test` | Interactively test MCP tools (select tool, enter args, execute via Wrangler) |
+| `test-direct` | Test MCP directly without Wrangler/Worker isolation |
+| `list` | List all loaded MCP servers |
+| `saved` | List all saved MCP configurations |
+| `schema` | Get TypeScript API schema for an MCP |
+| `unload` | Unload an MCP server and clean up |
+| `conflicts` | Check for IDE MCP configuration conflicts |
+| `metrics` | Show performance metrics |
+| `help` | Show help message |
+| `exit` | Exit the CLI |
+
+## Testing with GitHub MCP
+
+<Steps>
+
+### Start the CLI
+
+```bash
+npx mcpguard
+```
+
+### Load the GitHub MCP Server
+
+```
+mcpguard> load
+MCP name: github
+Command (e.g., npx): npx
+Args (comma-separated): -y,@modelcontextprotocol/server-github
+Environment variables as JSON: {"GITHUB_PERSONAL_ACCESS_TOKEN":"ghp_your_token"}
+
+Loading MCP server...
+```
+
+### Check What Was Loaded
+
+```
+mcpguard> list
+```
+
+You'll see your loaded MCP server with its ID, status, and available tools.
+
+### Get the TypeScript API Schema
+
+```
+mcpguard> schema
+```
+
+Enter the MCP ID from the previous step. You'll see TypeScript API definitions generated from the MCP tools.
+
+### Execute Code
+
+```
+mcpguard> execute
+```
+
+Enter the MCP ID and TypeScript code:
+
+```typescript
+// Search for repositories
+const repos = await mcp.search_repositories({ query: 'typescript' });
+console.log(`Found ${repos.length} repositories`);
+```
+
+### View Metrics
+
+```
+mcpguard> metrics
+```
+
+Shows:
+- Total executions
+- Success rate
+- Average execution time
+- Estimated tokens saved
+
+### Clean Up
+
+```
+mcpguard> unload
+```
+
+Enter the MCP ID to clean up resources.
+
+</Steps>
+
+## Code Execution Examples
+
+### Simple Test
+
+```typescript
+console.log('Hello from Worker isolate!');
+const result = { message: 'Test successful', timestamp: Date.now() };
+console.log(JSON.stringify(result));
+```
+
+### Using MCP Tools
+
+```typescript
+// Search GitHub repositories
+const repos = await mcp.search_repositories({ 
+  query: 'cloudflare workers',
+  page: 1 
+});
+
+// Process results in the isolate
+const summary = repos.map(r => ({
+  name: r.name,
+  stars: r.stargazers_count
+}));
+
+// Only return the summary (not all raw data)
+console.log(JSON.stringify(summary, null, 2));
+```
+
+### Chaining Operations
+
+```typescript
+// Get user info
+const user = await mcp.get_user({ username: 'octocat' });
+
+// Get their repositories
+const repos = await mcp.list_user_repos({ 
+  username: user.login,
+  per_page: 5 
+});
+
+// Summarize
+console.log(`${user.name} has ${user.public_repos} repos`);
+console.log('Top 5:', repos.map(r => r.name).join(', '));
+```
+
+## Verbose Mode
+
+For debugging, use the `-v` or `--verbose` flag:
+
+```bash
+npx mcpguard --verbose
+```
+
+This shows detailed logs including:
+- MCP process startup
+- Wrangler dev server status
+- RPC server communication
+- Worker execution details
+
+## Environment Setup
+
+Create a `.env` file in your project root:
+
+```bash
+# Required for GitHub MCP
+GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxxxx
+
+# Optional: Enable debug logging
+LOG_LEVEL=debug
+```
+
+<Callout type="info" title="Environment Variable Names">
+  Each MCP server expects specific environment variable names. Check the MCP's documentation for required variables. For GitHub MCP, use `GITHUB_PERSONAL_ACCESS_TOKEN`.
+</Callout>
+
+## Saved Configurations
+
+MCP Guard saves your MCP configurations for easy reuse:
+
+```
+mcpguard> saved
+```
+
+Lists all saved configurations with:
+- MCP name
+- Command and arguments
+- Environment variable placeholders (actual values not stored)
+
+Saved configs use `${VAR_NAME}` placeholders for environment variables, so your secrets stay in `.env` files.
+

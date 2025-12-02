@@ -1,0 +1,49 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Main shield gradient - creates depth -->
+    <linearGradient id="shieldMain" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" style="stop-color:#4ade80"/>
+      <stop offset="45%" style="stop-color:#22c55e"/>
+      <stop offset="100%" style="stop-color:#16a34a"/>
+    </linearGradient>
+    <!-- Edge definition gradient -->
+    <linearGradient id="shieldEdge" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#15803d"/>
+      <stop offset="100%" style="stop-color:#166534"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Subtle shadow - moved up, smaller -->
+  <path d="M64 12L112 26V54C112 84 90 106 64 117C38 106 16 84 16 54V26L64 12Z" 
+        fill="#0f172a" 
+        opacity="0.15"
+        transform="translate(2, 3)"/>
+  
+  <!-- Main shield shape -->
+  <path d="M64 10L114 25V54C114 85 91 108 64 119C37 108 14 85 14 54V25L64 10Z" 
+        fill="url(#shieldMain)"/>
+  
+  <!-- Left edge highlight -->
+  <path d="M64 10L14 25V54C14 85 37 108 64 119L64 10Z" 
+        fill="white" 
+        opacity="0.15"/>
+  
+  <!-- Right edge shadow for depth -->
+  <path d="M64 10L114 25V54C114 85 91 108 64 119L64 10Z" 
+        fill="url(#shieldEdge)" 
+        opacity="0.25"/>
+  
+  <!-- Crisp border -->
+  <path d="M64 10L114 25V54C114 85 91 108 64 119C37 108 14 85 14 54V25L64 10Z" 
+        fill="none" 
+        stroke="#15803d" 
+        stroke-width="2"/>
+  
+  <!-- White checkmark - bold and crisp -->
+  <path d="M46 62L58 74L82 50" 
+        stroke="white" 
+        stroke-width="10" 
+        stroke-linecap="round" 
+        stroke-linejoin="round" 
+        fill="none"/>
+</svg>

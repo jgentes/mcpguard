@@ -1,0 +1,214 @@
+---
+title: MCP Server Mode
+description: Using MCP Guard as an MCP server for AI agents.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+# MCP Server Mode
+
+MCP Guard can run as an MCP server itself, providing secure isolation for all your other MCPs. This is how it integrates with AI agents like Claude Desktop, Cursor IDE, and GitHub Copilot.
+
+## Configuration
+
+Add MCP Guard to your IDE's MCP configuration:
+
+<Tabs items={['Cursor', 'Claude Desktop', 'GitHub Copilot']}>
+  <Tab value="Cursor">
+    **File:** `~/.cursor/mcp.jsonc` (or `%APPDATA%\Cursor\User\globalStorage\mcp.jsonc` on Windows)
+
+    ```json
+    {
+      "mcpServers": {
+        "mcpguard": {
+          "command": "npx",
+          "args": ["-y", "mcpguard"]
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab value="Claude Desktop">
+    **File:** `~/.config/claude/claude_desktop_config.json` (or `%APPDATA%\Claude\claude_desktop_config.json` on Windows)
+
+    ```json
+    {
+      "mcpServers": {
+        "mcpguard": {
+          "command": "npx",
+          "args": ["-y", "mcpguard"]
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab value="GitHub Copilot">
+    **File:** `~/.github/copilot/mcp.jsonc`
+
+    ```json
+    {
+      "mcpServers": {
+        "mcpguard": {
+          "command": "npx",
+          "args": ["-y", "mcpguard"]
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Available MCP Tools
+
+### Transparent Proxy Tools
+
+When MCPGuard discovers your other MCPs, their tools become available with namespaced names:
+
+```
+github::search_repositories
+github::create_issue
+filesystem::read_file
+weather::get_forecast
+```
+
+- Schemas are loaded on-demand when tools are called
+- All tool calls route through secure isolation
+- Results returned transparently to the AI
+
+### MCPGuard Management Tools
+
+| Tool | Description |
+|------|-------------|
+| `execute_code` | Execute TypeScript code against an MCP (auto-loads MCPs if needed) |
+| `disable_mcps` | Disable MCP servers in your IDE configuration |
+| `search_mcp_tools` | Discover which MCPs are configured in your IDE |
+| `load_mcp_server` | Manually load an MCP server |
+| `list_available_mcps` | List all currently loaded MCP servers |
+| `get_mcp_by_name` | Find a loaded MCP server by name |
+| `get_mcp_schema` | Get TypeScript API definition for a loaded MCP |
+| `unload_mcp_server` | Unload an MCP server |
+| `get_metrics` | Get performance metrics |
+
+## Transparent Proxy Mode
+
+By default, MCPGuard operates in **transparent proxy mode**:
+
+1. **Discovers** all MCPs configured in your IDE (even disabled ones)
+2. **Lazy-loads** tool schemas only when tools are actually called
+3. **Routes** all tool calls through secure Worker isolation
+4. **Auto-loads** MCPs when their tools are first used
+
+<Callout type="info" title="No Config Changes Needed">
+  Once MCPGuard is running, all your existing MCP tool calls automatically go through secure isolation. The AI doesn't need to know about the isolation layer.
+</Callout>
+
+### Example Flow
+
+When the AI calls `github::search_repositories`:
+
+1. MCPGuard intercepts the namespaced call
+2. If GitHub MCP isn't loaded, it's automatically loaded
+3. The call executes in a secure Worker isolate
+4. Results return to the AI transparently
+
+## Direct Code Execution
+
+For complex operations, use the `execute_code` tool:
+
+```typescript
+// AI writes code that runs in isolation
+const repos = await mcp.search_repositories({ query: 'typescript' });
+const summary = repos.slice(0, 5).map(r => `${r.name}: ${r.stars} stars`);
+console.log(summary.join('\n'));
+```
+
+**Benefits:**
+- Process large datasets in the sandbox
+- Return only summarized results
+- Reduce context window usage by up to 98%
+
+## Development Mode
+
+For local development:
+
+```bash
+# Start in development mode
+npm run dev
+```
+
+Then configure your AI agent to use the local server:
+
+```json
+{
+  "mcpServers": {
+    "mcpguard": {
+      "command": "node",
+      "args": ["/path/to/mcpguard/dist/server/index.js"]
+    }
+  }
+}
+```
+
+## Best Practices
+
+### Disable Other MCPs
+
+For maximum efficiency and security:
+
+```json
+{
+  "mcpServers": {
+    "mcpguard": {
+      "command": "npx",
+      "args": ["-y", "mcpguard"]
+    },
+    "github": {
+      "disabled": true,
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"]
+    }
+  }
+}
+```
+
+- MCPGuard still discovers disabled MCPs
+- Tool calls route through secure isolation
+- No duplicate tool loading in context window
+
+### Use Code Mode for Complex Tasks
+
+Instead of multiple tool calls:
+
+```
+// Traditional: 5 separate tool calls
+search_repositories → 25,000 tokens
+get_repository → 5,000 tokens
+list_issues → 10,000 tokens
+...
+```
+
+Use code mode:
+
+```typescript
+// Single execute_code call: ~750 tokens
+const repos = await mcp.search_repositories({ query: 'test' });
+const filtered = repos.filter(r => r.stars > 100);
+console.log(`${filtered.length} popular repos found`);
+```
+
+### Monitor with Metrics
+
+Check performance with `get_metrics`:
+
+```json
+{
+  "total_executions": 150,
+  "successful_executions": 148,
+  "failed_executions": 2,
+  "average_execution_time_ms": 234,
+  "total_mcp_calls": 523,
+  "estimated_tokens_saved": 45000
+}
+```
+

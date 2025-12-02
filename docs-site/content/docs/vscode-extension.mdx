@@ -1,0 +1,124 @@
+---
+title: VS Code Extension
+description: Configure MCP Guard using the VS Code extension interface.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+# VS Code Extension
+
+The MCP Guard VS Code extension provides a visual interface for managing your MCP servers and their security settings.
+
+## Features
+
+- **Auto-Discovery**: Automatically detects MCP servers from Claude Code, Cursor, and GitHub Copilot configurations
+- **Network Allowlists**: Control which hosts each MCP can access
+- **File System Controls**: Restrict read/write access to specific directories
+- **Resource Limits**: Set execution time, memory, and API call limits
+- **Per-MCP Settings**: Configure each MCP server independently
+
+## Quick Start
+
+<Steps>
+
+### Open the Panel
+
+Click the **shield icon** 🛡️ in the activity bar (left sidebar) to open MCP Guard.
+
+### View Your MCPs
+
+Your MCP servers are automatically discovered from IDE configurations. Each MCP shows:
+- Name and status
+- Protection toggle
+- Configuration options
+
+### Enable Protection
+
+Toggle **guard protection** on for any MCP you want to isolate. When enabled, all tool calls for that MCP will route through the secure Worker environment.
+
+### Configure Settings
+
+Click on any MCP to expand its settings and configure network, file system, and resource options.
+
+</Steps>
+
+## Configuration Options
+
+### Network Access
+
+| Option | Description |
+|--------|-------------|
+| **Enable Network Access** | Allow the MCP to make outbound requests |
+| **Allowed Hosts** | Specific domains that can be accessed (e.g., `api.github.com`) |
+| **Allow Localhost** | Permit requests to localhost/127.0.0.1 |
+
+<Callout type="warning" title="Default: No Network">
+  By default, MCPs have **zero network access**. All outbound requests are blocked unless explicitly allowed.
+</Callout>
+
+### File System Access
+
+| Option | Description |
+|--------|-------------|
+| **Enable File System** | Allow the MCP to access files |
+| **Read Paths** | Directories the MCP can read from |
+| **Write Paths** | Directories the MCP can write to |
+
+### Resource Limits
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| **Max Execution Time** | 30s | Maximum time per execution |
+| **Max Memory** | 128MB | Memory limit |
+| **Max MCP Calls** | 100 | Maximum tool calls per execution |
+
+## Commands
+
+Access these commands via the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`):
+
+| Command | Description |
+|---------|-------------|
+| `MCP Guard: Open Settings` | Open the configuration panel |
+| `MCP Guard: Refresh MCP List` | Re-scan for MCP servers |
+| `MCP Guard: Import from IDE Config` | Import MCP configurations |
+
+## Security Model
+
+The VS Code extension uses Cloudflare Workers isolates for execution:
+
+- **Network Isolation**: All outbound access blocked by default
+- **Process Isolation**: Each execution runs in a fresh isolate
+- **Configurable Allowlists**: Granular control over what each MCP can access
+
+## Troubleshooting
+
+### MCPs Not Appearing
+
+1. Ensure your IDE configuration files exist:
+   - **Claude Code**: `~/.config/claude/claude_desktop_config.json`
+   - **Cursor**: `~/.cursor/User/globalStorage/mcp.json`
+   - **GitHub Copilot**: `~/.github-copilot/apps.json`
+
+2. Use the **Refresh MCP List** command to re-scan
+
+3. Check the Output panel (View → Output → MCP Guard) for errors
+
+### Protection Not Working
+
+1. Ensure the MCP has protection **enabled** (toggle is on)
+2. Check that the MCP Guard server is running (visible in status bar)
+3. Restart VS Code if needed
+
+### Network Requests Failing
+
+If an MCP needs network access:
+1. Enable **Network Access** for that MCP
+2. Add specific domains to the **Allowed Hosts** list
+3. Only allow the minimum necessary domains
+
+## Support
+
+- [Documentation](https://github.com/mcpguard/mcpguard)
+- [Report Issues](https://github.com/mcpguard/mcpguard/issues)
+

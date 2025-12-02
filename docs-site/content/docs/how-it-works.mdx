@@ -1,0 +1,224 @@
+---
+title: How It Works
+description: Understanding MCP Guard's security architecture and code execution flow.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+# How It Works
+
+MCP Guard provides defense-in-depth security by combining multiple protection layers to create a **zero-trust execution environment** where AI-generated code can run safely.
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Your IDE (Cursor, Claude Code, etc.)        │
+│                                                                      │
+│  ┌──────────────────┐    ┌─────────────────────────────────────┐   │
+│  │   AI Agent       │───▶│         MCP Guard Server            │   │
+│  │                  │    │  ┌─────────────────────────────┐    │   │
+│  │  Generates code  │    │  │   Code Validation Layer     │    │   │
+│  │  to call MCP     │    │  │   • Blocks eval(), require() │    │   │
+│  │  tools           │    │  │   • Blocks process access    │    │   │
+│  └──────────────────┘    │  └─────────────────────────────┘    │   │
+│                          │                 │                    │   │
+│                          │                 ▼                    │   │
+│                          │  ┌─────────────────────────────┐    │   │
+│                          │  │   Cloudflare Worker Isolate  │    │   │
+│                          │  │   • No network access        │    │   │
+│                          │  │   • No filesystem access     │    │   │
+│                          │  │   • No env variables         │    │   │
+│                          │  │   • Memory/CPU limited       │    │   │
+│                          │  └─────────────────────────────┘    │   │
+│                          │                 │                    │   │
+│                          │                 ▼ (Service Binding)  │   │
+│                          │  ┌─────────────────────────────┐    │   │
+│                          │  │   MCP Server (e.g. GitHub)   │    │   │
+│                          │  │   • API keys stored safely   │    │   │
+│                          │  │   • Network access allowed   │    │   │
+│                          │  └─────────────────────────────┘    │   │
+│                          └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Security Layers
+
+### Layer 1: Code Validation (Pre-Execution)
+
+Before any code runs, MCP Guard validates it for dangerous patterns:
+
+```typescript
+// BLOCKED patterns:
+require('fs')           // No require()
+eval('code')            // No eval()
+process.env.SECRET      // No process access
+import('module')        // No dynamic imports
+__dirname               // No path access
+new Function('code')    // No Function constructor
+child_process           // No system execution
+```
+
+### Layer 2: V8 Isolate Sandboxing (Runtime)
+
+Code executes in a Cloudflare Workers V8 isolate:
+
+- **Fresh environment** per execution
+- **No Node.js APIs** (fs, child_process, etc.)
+- **No global state** persists between runs
+- **Memory limited** (configurable, default 128MB)
+- **CPU limited** (configurable execution timeout)
+
+### Layer 3: Network Isolation
+
+```typescript
+// Worker configuration
+{
+  globalOutbound: null  // ← CRITICAL: All fetch() calls fail
+}
+```
+
+The isolate has **zero network capability**. It cannot:
+- Make HTTP requests
+- Open WebSocket connections
+- Access any external resources
+
+### Layer 4: Binding-Based Access Control
+
+The only way to interact with MCP tools is through **Service Bindings**:
+
+```typescript
+// Inside the isolate, code can only call:
+await mcp.search_repositories({ query: 'cloudflare' })
+
+// This calls a Service Binding, NOT a network request
+// The binding is the ONLY way to communicate with MCPs
+```
+
+### Layer 5: Credential Isolation
+
+- API keys are **never exposed** to the isolate
+- Credentials are managed by the MCP Guard server
+- MCP bindings handle authentication transparently
+- Even if code tried to access credentials, they don't exist in scope
+
+## Code Execution Flow
+
+<Callout type="info" title="Step by Step">
+  Here's exactly what happens when the AI generates and executes code:
+</Callout>
+
+1. **User Request**: AI calls `execute_code` with TypeScript code
+
+2. **Validation**: MCP Guard validates code for dangerous patterns
+   - If blocked patterns found → Error returned immediately
+   - If safe → Continue to execution
+
+3. **Worker Generation**: MCP Guard generates a Worker script containing:
+   - User code embedded directly
+   - MCP binding stubs (functions that call `env.MCP.callTool()`)
+   - Console output capture
+   - Metrics tracking
+
+4. **Isolate Creation**: Wrangler spawns a fresh V8 isolate:
+   - `globalOutbound: null` (no network)
+   - Memory and CPU limits applied
+   - Service Binding injected for MCP access
+
+5. **Code Execution**: User code runs in the isolate:
+   - Can call MCP tools via generated stubs
+   - Cannot access network, filesystem, or environment
+   - Console output captured
+
+6. **MCP Tool Calls**: When code calls an MCP tool:
+   ```typescript
+   await mcp.search_repositories({ query: 'test' })
+   ```
+   - Stub calls `env.MCP.callTool('search_repositories', input)`
+   - Service Binding receives the call (runs in parent Worker)
+   - Parent Worker calls Node.js RPC server via localhost
+   - RPC server uses MCP SDK to call actual MCP process
+   - Results flow back through the chain
+
+7. **Results Return**: 
+   - Console output returned to AI
+   - Metrics recorded (execution time, MCP calls made)
+   - Isolate disposed (no state persists)
+
+## Service Bindings Architecture
+
+The key to MCP Guard's security is the **Service Binding** pattern:
+
+```
+┌─────────────────────────────────┐
+│     Dynamic Worker (Isolated)    │
+│     • globalOutbound: null       │
+│     • Cannot use fetch()         │
+│                                  │
+│  await mcp.toolName(args)        │
+│         │                        │
+│         ▼ (Service Binding call) │
+└─────────────────────────────────┘
+              │
+              │ (Native RPC, no network)
+              ▼
+┌─────────────────────────────────┐
+│     MCPBridge (Parent Worker)    │
+│     • Has network access         │
+│     • Receives binding calls     │
+│                                  │
+│  fetch('http://localhost/rpc')   │
+│         │                        │
+└─────────────────────────────────┘
+              │
+              │ (localhost only)
+              ▼
+┌─────────────────────────────────┐
+│     Node.js RPC Server           │
+│     • MCP SDK Client             │
+│     • Manages credentials        │
+│                                  │
+│  client.callTool(name, args)     │
+│         │                        │
+└─────────────────────────────────┘
+              │
+              │ (stdio)
+              ▼
+┌─────────────────────────────────┐
+│     MCP Server Process           │
+│     (e.g. GitHub MCP)            │
+└─────────────────────────────────┘
+```
+
+**Key benefits:**
+- Dynamic workers use native Service Binding calls (not fetch)
+- True network isolation for user code
+- Only parent Worker can reach the RPC server
+- Credentials never exposed to user code
+
+## Why This Architecture?
+
+### Traditional MCP (Insecure)
+
+```
+AI → MCP Server → Direct access to everything
+                  • Filesystem ⚠️
+                  • Network ⚠️
+                  • Environment ⚠️
+                  • System ⚠️
+```
+
+### MCP Guard (Secure)
+
+```
+AI → Code → Validation → Isolate → Service Binding → MCP
+            ✅ Blocked    ✅ No      ✅ Controlled
+               patterns      access    communication
+```
+
+The isolation boundary ensures that even if the AI generates malicious code:
+1. Dangerous patterns are blocked before execution
+2. The isolate cannot access system resources
+3. Communication is limited to approved MCP bindings
+4. Credentials remain hidden from the executing code
+
