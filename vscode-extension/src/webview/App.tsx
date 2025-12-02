@@ -3,17 +3,21 @@
  */
 
 import React, { useState } from 'react';
-import { useSettings, useMCPServers, useNotifications, postMessage } from './hooks';
-import { Header, MCPCard, EmptyState, Notification, Button, ShieldIcon, ShieldOffIcon, BeakerIcon, TestingTab } from './components';
+import { useSettings, useMCPServers, useNotifications, useTokenSavings, useConnectionTest, postMessage } from './hooks';
+import { Header, MCPCard, EmptyState, Notification, Button, ShieldIcon, ShieldOffIcon, BeakerIcon, TestingTab, TokenSavingsBadge, ConnectionTestModal } from './components';
 import type { MCPSecurityConfig, MCPGuardSettings } from './types';
 
 export const App: React.FC = () => {
   const { settings, saveSettings, saveMCPConfig, isLoading: settingsLoading } = useSettings();
   const { servers, isLoading: serversLoading, refresh } = useMCPServers();
   const { notifications, dismiss } = useNotifications();
+  const { tokenSavings, assessingMCPs } = useTokenSavings();
+  const { testingMCP, currentStep, testResult, testConnection, openLogs, clearResult } = useConnectionTest();
   const [showTestingTab, setShowTestingTab] = useState(false);
+  const [showTestModal, setShowTestModal] = useState(false);
 
   const isLoading = settingsLoading || serversLoading;
+  const isAssessingTokens = assessingMCPs.size > 0;
 
   const handleGlobalToggle = (enabled: boolean) => {
     const newSettings: MCPGuardSettings = { ...settings, enabled };
@@ -26,6 +30,20 @@ export const App: React.FC = () => {
 
   const handleImport = () => {
     postMessage({ type: 'importFromIDE' });
+  };
+
+  const handleTestConnection = (mcpName: string) => {
+    setShowTestModal(true);
+    testConnection(mcpName);
+  };
+
+  const handleViewLogs = () => {
+    openLogs();
+  };
+
+  const handleCloseTestModal = () => {
+    setShowTestModal(false);
+    clearResult();
   };
 
   // Find existing config for each server
@@ -43,8 +61,13 @@ export const App: React.FC = () => {
   const sortedServers = [...servers].sort((a, b) => a.name.localeCompare(b.name));
   
   // Count guarded and unguarded for status summary
-  const guardedCount = sortedServers.filter(s => isServerGuarded(s.name)).length;
-  const unguardedCount = sortedServers.length - guardedCount;
+  const guardedServers = sortedServers.filter(s => isServerGuarded(s.name));
+  const unguardedServers = sortedServers.filter(s => !isServerGuarded(s.name));
+  const guardedCount = guardedServers.length;
+  const unguardedCount = unguardedServers.length;
+  
+  // Consistent yellow color for unguarded state (matches MCP card styling)
+  const UNGUARDED_YELLOW = '#eab308'; // Muted yellow (less orange)
 
   return (
     <div style={{ padding: '16px', maxWidth: '100%' }}>
@@ -62,21 +85,6 @@ export const App: React.FC = () => {
         onRefresh={refresh}
         isLoading={isLoading}
       />
-
-      {/* Tab Buttons */}
-      {!showTestingTab && servers.length > 0 && (
-        <div style={{ marginBottom: '16px' }}>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setShowTestingTab(true)}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            <BeakerIcon size={14} />
-            Security Testing
-          </Button>
-        </div>
-      )}
 
       {/* Testing Tab */}
       {showTestingTab && (
@@ -130,21 +138,23 @@ export const App: React.FC = () => {
               background: !settings.enabled 
                 ? 'var(--bg-secondary)'
                 : unguardedCount > 0 
-                  ? 'rgba(255, 215, 0, 0.1)' 
+                  ? 'rgba(234, 179, 8, 0.1)' 
                   : 'var(--bg-secondary)',
               border: !settings.enabled
                 ? '1px solid var(--border-color)'
                 : unguardedCount > 0 
-                  ? `1px solid var(--warning)` 
+                  ? `1px solid ${UNGUARDED_YELLOW}` 
                   : '1px solid var(--border-color)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-              <ShieldOffIcon size={16} className={undefined} />
+              <div style={{ color: !settings.enabled ? 'var(--text-muted)' : unguardedCount > 0 ? UNGUARDED_YELLOW : 'var(--text-secondary)' }}>
+                <ShieldOffIcon size={16} className={undefined} />
+              </div>
               <span style={{ 
                 fontSize: '12px', 
                 fontWeight: 600, 
-                color: !settings.enabled ? 'var(--text-muted)' : unguardedCount > 0 ? 'var(--warning)' : 'var(--text-secondary)',
+                color: !settings.enabled ? 'var(--text-muted)' : unguardedCount > 0 ? UNGUARDED_YELLOW : 'var(--text-secondary)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.5px'
               }}>
@@ -154,7 +164,7 @@ export const App: React.FC = () => {
                 marginLeft: 'auto',
                 fontSize: '18px', 
                 fontWeight: 700, 
-                color: !settings.enabled ? 'var(--text-muted)' : unguardedCount > 0 ? 'var(--warning)' : 'var(--text-muted)'
+                color: !settings.enabled ? 'var(--text-muted)' : unguardedCount > 0 ? UNGUARDED_YELLOW : 'var(--text-muted)'
               }}>
                 {!settings.enabled ? servers.length : unguardedCount}
               </span>
@@ -164,9 +174,29 @@ export const App: React.FC = () => {
                 Protection disabled
               </div>
             ) : unguardedCount > 0 ? (
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                {unguardedCount} MCP{unguardedCount === 1 ? '' : 's'} need protection
-              </div>
+              <>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                  {unguardedCount} MCP{unguardedCount === 1 ? '' : 's'} need protection
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                  {unguardedServers.map(server => (
+                    <span
+                      key={server.name}
+                      style={{
+                        fontSize: '10px',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        background: 'rgba(234, 179, 8, 0.2)',
+                        border: `1px solid ${UNGUARDED_YELLOW}`,
+                        color: 'var(--text-primary)',
+                        fontWeight: 400,
+                      }}
+                    >
+                      {server.name}
+                    </span>
+                  ))}
+                </div>
+              </>
             ) : (
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 All MCPs protected ✓
@@ -217,15 +247,46 @@ export const App: React.FC = () => {
                 {guardedCount} MCP{guardedCount === 1 ? '' : 's'} configured
               </div>
             ) : guardedCount > 0 ? (
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                {guardedCount} MCP{guardedCount === 1 ? '' : 's'} protected
-              </div>
+              <>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                  {guardedCount} MCP{guardedCount === 1 ? '' : 's'} protected
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                  {guardedServers.map(server => (
+                    <span
+                      key={server.name}
+                      style={{
+                        fontSize: '10px',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        background: 'rgba(34, 197, 94, 0.2)',
+                        border: '1px solid #22c55e',
+                        color: 'var(--text-primary)',
+                        fontWeight: 400,
+                      }}
+                    >
+                      {server.name}
+                    </span>
+                  ))}
+                </div>
+              </>
             ) : (
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 No MCPs guarded yet
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Token Savings Badge */}
+      {servers.length > 0 && (
+        <div style={{ marginBottom: '20px' }}>
+          <TokenSavingsBadge 
+            tokenSavings={tokenSavings}
+            isAssessing={isAssessingTokens}
+            globalEnabled={settings.enabled}
+          />
         </div>
       )}
 
@@ -243,7 +304,7 @@ export const App: React.FC = () => {
       )}
 
       {/* MCP List - Single alphabetically sorted list */}
-      {!isLoading && sortedServers.length > 0 && (
+      {!isLoading && !showTestingTab && sortedServers.length > 0 && (
         <div style={{ marginBottom: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
             <h2 style={{ 
@@ -255,9 +316,21 @@ export const App: React.FC = () => {
             }}>
               MCP Servers ({sortedServers.length})
             </h2>
-            <Button variant="ghost" size="sm" onClick={handleImport}>
-              Re-import
-            </Button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowTestingTab(true)}
+                disabled={guardedCount === 0}
+                style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+              >
+                <BeakerIcon size={14} />
+                Test
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleImport}>
+                Re-import
+              </Button>
+            </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {sortedServers.map(server => (
@@ -268,6 +341,8 @@ export const App: React.FC = () => {
                 onConfigChange={handleConfigChange}
                 currentIDE="cursor"
                 globalEnabled={settings.enabled}
+                onTestConnection={handleTestConnection}
+                onViewLogs={handleViewLogs}
               />
             ))}
           </div>
@@ -289,6 +364,17 @@ export const App: React.FC = () => {
       </div>
         </>
       )}
+
+      {/* Connection Test Modal */}
+      <ConnectionTestModal
+        isOpen={showTestModal}
+        onClose={handleCloseTestModal}
+        testResult={testResult}
+        testingMCP={testingMCP}
+        currentStep={currentStep}
+        onViewLogs={handleViewLogs}
+        onRetry={testingMCP ? () => testConnection(testingMCP) : undefined}
+      />
     </div>
   );
 };

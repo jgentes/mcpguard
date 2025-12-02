@@ -11,9 +11,11 @@ import {
   enableMCPInIDE,
   ensureMCPGuardInConfig,
   removeMCPGuardFromConfig,
-  isMCPDisabled 
+  isMCPDisabled,
+  getIDEConfigPath
 } from './config-loader';
-import type { MCPGuardSettings, MCPSecurityConfig, WebviewMessage, ExtensionMessage } from './types';
+import { assessMCPTokensWithError, calculateTokenSavings, testMCPConnection } from './token-assessor';
+import type { MCPGuardSettings, MCPSecurityConfig, WebviewMessage, ExtensionMessage, MCPServerInfo, TokenMetricsCache, AssessmentErrorsCache } from './types';
 import { DEFAULT_SETTINGS } from './types';
 
 export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
@@ -22,9 +24,17 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _extensionUri: vscode.Uri;
   private _mcpCount: number = 0;
+  private _outputChannel: vscode.OutputChannel;
 
   constructor(extensionUri: vscode.Uri) {
     this._extensionUri = extensionUri;
+    this._outputChannel = vscode.window.createOutputChannel('MCP Guard');
+  }
+  
+  private _log(message: string): void {
+    const timestamp = new Date().toISOString();
+    this._outputChannel.appendLine(`[${timestamp}] ${message}`);
+    console.log(`MCP Guard: ${message}`);
   }
 
   /**
@@ -53,6 +63,8 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ): void {
+    this._log('Webview panel opened');
+    this._outputChannel.show(true); // Show the output channel
     this._view = webviewView;
 
     webviewView.webview.options = {
@@ -100,12 +112,15 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
    * Handle messages from the webview
    */
   private async _handleMessage(message: WebviewMessage): Promise<void> {
+    this._log(`Received message: ${message.type}`);
+    
     switch (message.type) {
       case 'getSettings':
         await this._sendSettings();
         break;
       
       case 'getMCPServers':
+        this._log('getMCPServers requested');
         await this._sendMCPServers();
         break;
       
@@ -128,6 +143,130 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
       case 'openMCPGuardDocs':
         vscode.env.openExternal(vscode.Uri.parse('https://github.com/mcpguard/mcpguard'));
         break;
+      
+      case 'assessTokens':
+        await this._assessTokensForMCP(message.mcpName);
+        break;
+      
+      case 'openIDEConfig':
+        await this._openIDEConfig(message.source);
+        break;
+      
+      case 'retryAssessment':
+        await this._retryAssessment(message.mcpName);
+        break;
+      
+      case 'openLogs':
+        this._outputChannel.show(true);
+        break;
+      
+      case 'testConnection':
+        await this._testConnection(message.mcpName);
+        break;
+    }
+  }
+
+  /**
+   * Open the IDE config file for editing
+   */
+  private async _openIDEConfig(source: 'claude' | 'copilot' | 'cursor' | 'unknown'): Promise<void> {
+    const configPath = getIDEConfigPath(source);
+    if (configPath) {
+      const doc = await vscode.workspace.openTextDocument(configPath);
+      await vscode.window.showTextDocument(doc);
+    } else {
+      this._postMessage({ type: 'error', message: 'Could not find IDE config file' });
+    }
+  }
+
+  /**
+   * Retry assessment for a specific MCP (clears cached error first)
+   */
+  private async _retryAssessment(mcpName: string): Promise<void> {
+    // Clear the cached error first
+    const settingsPath = getSettingsPath();
+    let settings: MCPGuardSettings = DEFAULT_SETTINGS;
+    
+    if (fs.existsSync(settingsPath)) {
+      const content = fs.readFileSync(settingsPath, 'utf-8');
+      settings = JSON.parse(content) as MCPGuardSettings;
+    }
+    
+    // Clear cached error
+    if (settings.assessmentErrorsCache?.[mcpName]) {
+      delete settings.assessmentErrorsCache[mcpName];
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    }
+    
+    // Now re-assess
+    await this._assessTokensForMCP(mcpName);
+    
+    // Refresh the MCP list to show updated state
+    await this._sendMCPServers();
+  }
+
+  /**
+   * Test connection to an MCP with verbose step-by-step diagnostics
+   */
+  private async _testConnection(mcpName: string): Promise<void> {
+    const mcps = loadAllMCPServers();
+    const server = mcps.find(m => m.name === mcpName);
+    
+    if (!server) {
+      this._postMessage({ type: 'error', message: `MCP ${mcpName} not found` });
+      return;
+    }
+
+    this._log(`Testing connection to ${mcpName}...`);
+    this._outputChannel.appendLine(`\n${'='.repeat(60)}`);
+    this._outputChannel.appendLine(`Connection Test: ${mcpName}`);
+    this._outputChannel.appendLine(`Started: ${new Date().toISOString()}`);
+    this._outputChannel.appendLine('='.repeat(60));
+
+    try {
+      const result = await testMCPConnection(server, (step) => {
+        this._postMessage({ type: 'connectionTestProgress', mcpName, step });
+        this._log(`  → ${step}`);
+      });
+
+      // Log all steps to output channel
+      for (const step of result.steps) {
+        this._outputChannel.appendLine(`\n[${step.success ? '✓' : '✗'}] ${step.name}`);
+        if (step.details) {
+          this._outputChannel.appendLine(`    ${step.details.replace(/\n/g, '\n    ')}`);
+        }
+        if (step.durationMs !== undefined) {
+          this._outputChannel.appendLine(`    Duration: ${step.durationMs}ms`);
+        }
+        if (step.data?.request) {
+          this._outputChannel.appendLine(`    Request:\n      ${step.data.request.replace(/\n/g, '\n      ')}`);
+        }
+        if (step.data?.response) {
+          this._outputChannel.appendLine(`    Response:\n      ${step.data.response.replace(/\n/g, '\n      ')}`);
+        }
+      }
+
+      this._outputChannel.appendLine(`\n${'='.repeat(60)}`);
+      this._outputChannel.appendLine(`Result: ${result.success ? 'SUCCESS' : 'FAILED'}`);
+      this._outputChannel.appendLine(`Total Duration: ${result.durationMs}ms`);
+      if (result.error) {
+        this._outputChannel.appendLine(`Error: ${result.error.message}`);
+        if (result.error.diagnostics) {
+          this._outputChannel.appendLine(`Diagnostics: ${JSON.stringify(result.error.diagnostics, null, 2)}`);
+        }
+      }
+      this._outputChannel.appendLine('='.repeat(60) + '\n');
+
+      this._postMessage({ type: 'connectionTestResult', data: result });
+
+      if (result.success) {
+        this._postMessage({ type: 'success', message: `Connection to ${mcpName} successful!` });
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this._log(`Connection test failed: ${errorMessage}`);
+      this._outputChannel.appendLine(`\nUnexpected error: ${errorMessage}`);
+      this._postMessage({ type: 'error', message: `Connection test failed: ${errorMessage}` });
     }
   }
 
@@ -158,9 +297,40 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
     try {
       this._postMessage({ type: 'loading', isLoading: true });
       const mcps = loadAllMCPServers();
+      
+      // Load token metrics from cache
+      const settingsPath = getSettingsPath();
+      let settings: MCPGuardSettings = DEFAULT_SETTINGS;
+      
+      if (fs.existsSync(settingsPath)) {
+        const content = fs.readFileSync(settingsPath, 'utf-8');
+        settings = JSON.parse(content) as MCPGuardSettings;
+      }
+      
+      const tokenCache = settings.tokenMetricsCache || {};
+      const errorCache = settings.assessmentErrorsCache || {};
+      
+      // Attach cached token metrics and errors to each MCP
+      const mcpsWithMetrics: MCPServerInfo[] = mcps.map(mcp => ({
+        ...mcp,
+        tokenMetrics: tokenCache[mcp.name],
+        assessmentError: errorCache[mcp.name],
+      }));
+      
       this._mcpCount = mcps.length;
       this._updateBadge();
-      this._postMessage({ type: 'mcpServers', data: mcps });
+      this._postMessage({ type: 'mcpServers', data: mcpsWithMetrics });
+      
+      // Send token savings summary
+      await this._sendTokenSavings();
+      
+      // Auto-assess tokens for new MCPs in the background
+      // Small delay to not block UI
+      setTimeout(() => {
+        this._autoAssessTokens().catch(err => {
+          console.error('Auto token assessment error:', err);
+        });
+      }, 500);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       this._postMessage({ type: 'error', message: `Failed to load MCP servers: ${message}` });
@@ -312,6 +482,166 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
   private async _importFromIDE(): Promise<void> {
     await this._sendMCPServers();
     this._postMessage({ type: 'success', message: 'MCPs imported from IDE configurations' });
+  }
+
+  /**
+   * Assess token usage for a specific MCP
+   */
+  private async _assessTokensForMCP(mcpName: string): Promise<void> {
+    const mcps = loadAllMCPServers();
+    const server = mcps.find(m => m.name === mcpName);
+    
+    if (!server) {
+      this._postMessage({ type: 'error', message: `MCP ${mcpName} not found` });
+      return;
+    }
+
+    this._postMessage({ type: 'tokenAssessmentProgress', mcpName, status: 'started' });
+
+    try {
+      const result = await assessMCPTokensWithError(server);
+      
+      // Save to settings cache
+      const settingsPath = getSettingsPath();
+      let settings: MCPGuardSettings = DEFAULT_SETTINGS;
+      
+      if (fs.existsSync(settingsPath)) {
+        const content = fs.readFileSync(settingsPath, 'utf-8');
+        settings = JSON.parse(content) as MCPGuardSettings;
+      }
+      
+      if (result.metrics) {
+        if (!settings.tokenMetricsCache) {
+          settings.tokenMetricsCache = {};
+        }
+        settings.tokenMetricsCache[mcpName] = result.metrics;
+        
+        // Clear any previous error
+        if (settings.assessmentErrorsCache?.[mcpName]) {
+          delete settings.assessmentErrorsCache[mcpName];
+        }
+        
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        this._postMessage({ type: 'tokenAssessmentProgress', mcpName, status: 'completed' });
+        await this._sendTokenSavings();
+      } else if (result.error) {
+        // Store the error
+        if (!settings.assessmentErrorsCache) {
+          settings.assessmentErrorsCache = {};
+        }
+        settings.assessmentErrorsCache[mcpName] = result.error;
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+        
+        this._postMessage({ type: 'tokenAssessmentProgress', mcpName, status: 'failed' });
+      }
+    } catch (error) {
+      console.error(`Token assessment failed for ${mcpName}:`, error);
+      this._postMessage({ type: 'tokenAssessmentProgress', mcpName, status: 'failed' });
+    }
+  }
+
+  /**
+   * Calculate and send token savings summary
+   */
+  private async _sendTokenSavings(): Promise<void> {
+    try {
+      const settingsPath = getSettingsPath();
+      let settings: MCPGuardSettings = DEFAULT_SETTINGS;
+      
+      this._log(`Loading settings from ${settingsPath}`);
+      
+      if (fs.existsSync(settingsPath)) {
+        const content = fs.readFileSync(settingsPath, 'utf-8');
+        settings = JSON.parse(content) as MCPGuardSettings;
+        this._log(`Loaded settings with ${settings.mcpConfigs.length} configs`);
+        this._log(`Configs: ${JSON.stringify(settings.mcpConfigs.map(c => ({ name: c.mcpName, guarded: c.isGuarded })))}`);
+      } else {
+        this._log('Settings file does not exist');
+      }
+      
+      const mcps = loadAllMCPServers();
+      this._log(`Found ${mcps.length} MCPs: ${mcps.map(m => m.name).join(', ')}`);
+      
+      const tokenCache = settings.tokenMetricsCache || {};
+      
+      const summary = calculateTokenSavings(mcps, settings.mcpConfigs, tokenCache);
+      this._log(`Token savings summary: ${JSON.stringify(summary)}`);
+      
+      this._postMessage({ type: 'tokenSavings', data: summary });
+    } catch (error) {
+      this._log(`Failed to calculate token savings: ${error}`);
+    }
+  }
+
+  /**
+   * Auto-assess tokens for MCPs that haven't been assessed yet
+   * Runs in the background without blocking
+   */
+  private async _autoAssessTokens(): Promise<void> {
+    const settingsPath = getSettingsPath();
+    let settings: MCPGuardSettings = DEFAULT_SETTINGS;
+    
+    if (fs.existsSync(settingsPath)) {
+      const content = fs.readFileSync(settingsPath, 'utf-8');
+      settings = JSON.parse(content) as MCPGuardSettings;
+    }
+    
+    const mcps = loadAllMCPServers();
+    const tokenCache = settings.tokenMetricsCache || {};
+    const errorCache = settings.assessmentErrorsCache || {};
+    
+    // Find MCPs that need assessment (not in success cache AND not in error cache)
+    const unassessedMCPs = mcps.filter(m => !tokenCache[m.name] && !errorCache[m.name] && (m.command || m.url));
+    
+    if (unassessedMCPs.length === 0) {
+      // All MCPs are already assessed (or have recorded errors), just send the summary
+      await this._sendTokenSavings();
+      return;
+    }
+    
+    console.log(`MCP Guard: Auto-assessing tokens for ${unassessedMCPs.length} MCP(s)...`);
+    
+    // Assess each MCP (limit to 3 concurrent for performance)
+    for (const server of unassessedMCPs.slice(0, 3)) {
+      this._postMessage({ type: 'tokenAssessmentProgress', mcpName: server.name, status: 'started' });
+      
+      try {
+        const result = await assessMCPTokensWithError(server);
+        
+        if (result.metrics) {
+          // Update success cache in memory
+          if (!settings.tokenMetricsCache) {
+            settings.tokenMetricsCache = {};
+          }
+          settings.tokenMetricsCache[server.name] = result.metrics;
+          tokenCache[server.name] = result.metrics;
+          
+          // Clear any previous error
+          if (settings.assessmentErrorsCache?.[server.name]) {
+            delete settings.assessmentErrorsCache[server.name];
+          }
+          
+          this._postMessage({ type: 'tokenAssessmentProgress', mcpName: server.name, status: 'completed' });
+        } else if (result.error) {
+          // Store the error
+          if (!settings.assessmentErrorsCache) {
+            settings.assessmentErrorsCache = {};
+          }
+          settings.assessmentErrorsCache[server.name] = result.error;
+          
+          this._postMessage({ type: 'tokenAssessmentProgress', mcpName: server.name, status: 'failed' });
+        }
+      } catch (error) {
+        console.error(`Auto-assessment failed for ${server.name}:`, error);
+        this._postMessage({ type: 'tokenAssessmentProgress', mcpName: server.name, status: 'failed' });
+      }
+    }
+    
+    // Save updated cache
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    
+    // Send updated token savings
+    await this._sendTokenSavings();
   }
 
   /**

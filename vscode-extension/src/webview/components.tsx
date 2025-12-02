@@ -8,8 +8,9 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import type { MCPSecurityConfig, MCPServerInfo, MCPGuardSettings } from './types';
+import type { MCPSecurityConfig, MCPServerInfo, MCPGuardSettings, TokenSavingsSummary, ConnectionTestResult, ConnectionTestStep } from './types';
 import { DEFAULT_SECURITY_CONFIG } from './types';
+import { postMessage } from './hooks';
 
 // ====================
 // Utility Components
@@ -185,9 +186,174 @@ export const InfoIcon: React.FC<IconProps> = ({ size = 20, className }) => (
   </svg>
 );
 
+export const ErrorIcon: React.FC<IconProps & { style?: React.CSSProperties }> = ({ size = 20, className, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} style={style}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="15" y1="9" x2="9" y2="15" />
+    <line x1="9" y1="9" x2="15" y2="15" />
+  </svg>
+);
+
+// Zap/lightning icon for tokens
+export const ZapIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+  </svg>
+);
+
+// Sparkles icon for token savings
+export const SparklesIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
+    <path d="M5 3v4" />
+    <path d="M19 17v4" />
+    <path d="M3 5h4" />
+    <path d="M17 19h4" />
+  </svg>
+);
+
+// Terminal/Log icon for viewing logs
+export const TerminalIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polyline points="4 17 10 11 4 5" />
+    <line x1="12" y1="19" x2="20" y2="19" />
+  </svg>
+);
+
+// Bug icon for diagnostics
+export const BugIcon: React.FC<IconProps> = ({ size = 20, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <rect x="8" y="6" width="8" height="14" rx="4" />
+    <path d="m19 7-3 2" />
+    <path d="m5 7 3 2" />
+    <path d="m19 19-3-2" />
+    <path d="m5 19 3-2" />
+    <path d="M20 13h-4" />
+    <path d="M4 13h4" />
+    <path d="M10 4l1 2" />
+    <path d="M14 4l-1 2" />
+  </svg>
+);
+
 // ====================
 // UI Components
 // ====================
+
+// ====================
+// Token Savings Badge Component
+// ====================
+
+interface TokenSavingsBadgeProps {
+  tokenSavings: TokenSavingsSummary | null;
+  isAssessing: boolean;
+  globalEnabled: boolean;
+}
+
+/**
+ * Displays context window token savings from using MCPGuard
+ * Shows how many tokens are saved by routing MCP calls through MCPGuard
+ * instead of loading all MCP tool schemas directly
+ */
+export const TokenSavingsBadge: React.FC<TokenSavingsBadgeProps> = ({ 
+  tokenSavings, 
+  isAssessing,
+  globalEnabled 
+}) => {
+  if (!tokenSavings && !isAssessing) {
+    return null;
+  }
+
+  // Format number with commas
+  const formatNumber = (num: number): string => {
+    return num.toLocaleString();
+  };
+
+  // No guarded MCPs yet
+  if (tokenSavings && tokenSavings.guardedMCPs === 0) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '10px 14px',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-color)',
+        }}
+      >
+        <ZapIcon size={16} className={undefined} />
+        <div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            Guard MCPs to save context window tokens
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Still assessing
+  if (isAssessing) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          padding: '12px 16px',
+          borderRadius: 'var(--radius-md)',
+          background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%)',
+          border: '1px solid rgba(139, 92, 246, 0.2)',
+        }}
+      >
+        <span className="loading-spinner" style={{ width: '16px', height: '16px' }} />
+        <div>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+            Assessing token usage...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!tokenSavings || tokenSavings.tokensSaved <= 0) {
+    return null;
+  }
+
+  const reductionPercent = Math.round((1 - tokenSavings.mcpGuardTokens / tokenSavings.totalTokensWithoutGuard) * 100);
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '16px',
+        padding: '10px 14px',
+        borderRadius: 'var(--radius-md)',
+        background: 'var(--bg-secondary)',
+        border: '1px solid rgba(139, 92, 246, 0.3)',
+        opacity: globalEnabled ? 1 : 0.6,
+        fontSize: '12px',
+      }}
+      className="animate-fade-in"
+    >
+      <SparklesIcon size={16} className={undefined} />
+      <span style={{ color: 'var(--text-muted)' }}>
+        {formatNumber(tokenSavings.totalTokensWithoutGuard)} → {formatNumber(tokenSavings.mcpGuardTokens)} tokens
+      </span>
+      <span style={{ color: '#8b5cf6', fontWeight: 600 }}>
+        {formatNumber(tokenSavings.tokensSaved)} saved
+      </span>
+      <span style={{ 
+        color: '#22c55e', 
+        fontWeight: 600,
+        marginLeft: 'auto',
+      }}>
+        {reductionPercent}% smaller
+      </span>
+    </div>
+  );
+};
 
 // ====================
 // Switch Component (shadcn-style)
@@ -198,13 +364,14 @@ interface SwitchProps {
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   className?: string;
+  uncheckedColor?: string;
 }
 
 /**
  * Switch component styled after shadcn/ui Switch
  * Uses consistent styling and proper alignment
  */
-export const Switch: React.FC<SwitchProps> = ({ checked, onCheckedChange, disabled = false, className }) => {
+export const Switch: React.FC<SwitchProps> = ({ checked, onCheckedChange, disabled = false, className, uncheckedColor = '#3f3f46' }) => {
   return (
     <button
       type="button"
@@ -217,7 +384,7 @@ export const Switch: React.FC<SwitchProps> = ({ checked, onCheckedChange, disabl
         height: '24px',
         borderRadius: '12px',
         border: 'none',
-        background: checked ? '#22c55e' : '#3f3f46',
+        background: checked ? '#22c55e' : uncheckedColor,
         position: 'relative',
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
@@ -470,12 +637,12 @@ interface MCPCardProps {
   onConfigChange: (config: MCPSecurityConfig) => void;
   currentIDE?: string; // The IDE we're currently running in
   globalEnabled?: boolean; // Whether MCP Guard is globally enabled
+  onTestConnection?: (mcpName: string) => void; // Callback to test connection
+  onViewLogs?: () => void; // Callback to open logs
 }
 
-export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange, currentIDE = 'cursor', globalEnabled = true }) => {
+export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange, currentIDE = 'cursor', globalEnabled = true, onTestConnection, onViewLogs }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [showTestModal, setShowTestModal] = useState(false);
-  const [selectedTestType, setSelectedTestType] = useState<'quick' | 'network' | 'codeInjection' | 'filesystem' | 'legitimate'>('quick');
   
   // Initialize config if not exists
   const currentConfig: MCPSecurityConfig = config || {
@@ -501,12 +668,15 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
     unknown: 'var(--text-muted)',
   };
 
+  // Consistent yellow color for unguarded state (matches status panel)
+  const UNGUARDED_YELLOW = '#eab308'; // Muted yellow (less orange)
+  
   // Determine border color based on guard status and global enabled state
   const getBorderColor = () => {
     if (!globalEnabled) {
       return 'var(--border-color)'; // Grey when globally disabled
     }
-    return currentConfig.isGuarded ? '#22c55e' : 'var(--warning)';
+    return currentConfig.isGuarded ? '#22c55e' : UNGUARDED_YELLOW;
   };
 
   return (
@@ -541,12 +711,12 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
               ? 'var(--bg-hover)'
               : currentConfig.isGuarded 
                 ? '#22c55e' 
-                : 'rgba(255, 215, 0, 0.15)',
+                : 'rgba(234, 179, 8, 0.15)',
             color: !globalEnabled 
               ? 'var(--text-muted)'
               : currentConfig.isGuarded 
                 ? 'white' 
-                : 'var(--warning)',
+                : UNGUARDED_YELLOW,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -580,19 +750,91 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
                 {server.source}
               </span>
             )}
+            {/* Token count badge - successfully assessed */}
+            {server.tokenMetrics && (
+              <span
+                style={{
+                  fontSize: '10px',
+                  padding: '2px 6px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(139, 92, 246, 0.5)',
+                  color: '#8b5cf6',
+                  fontWeight: 500,
+                }}
+                title={`${server.tokenMetrics.schemaChars.toLocaleString()} chars in schema`}
+              >
+                {server.tokenMetrics.toolCount} tools · {server.tokenMetrics.estimatedTokens.toLocaleString()} tokens
+              </span>
+            )}
+            {/* Assessment error - auth failed */}
+            {!server.tokenMetrics && server.assessmentError?.type === 'auth_failed' && (
+              <span
+                style={{
+                  fontSize: '10px',
+                  padding: '2px 6px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(239, 68, 68, 0.5)',
+                  color: 'var(--error)',
+                  fontWeight: 500,
+                }}
+                title={server.assessmentError.message}
+              >
+                auth failed
+              </span>
+            )}
+            {/* Assessment error - other errors */}
+            {!server.tokenMetrics && server.assessmentError && server.assessmentError.type !== 'auth_failed' && (
+              <span
+                style={{
+                  fontSize: '10px',
+                  padding: '2px 6px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  color: 'var(--error)',
+                  fontWeight: 500,
+                }}
+                title={server.assessmentError.message}
+              >
+                {server.assessmentError.type === 'connection_failed' ? 'connection failed' : 
+                 server.assessmentError.type === 'timeout' ? 'timeout' : 'error'}
+              </span>
+            )}
+            {/* URL-based MCP with auth configured but no error yet */}
+            {!server.tokenMetrics && !server.assessmentError && server.url && server.headers && (
+              <span
+                style={{
+                  fontSize: '10px',
+                  padding: '2px 6px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(255, 215, 0, 0.5)',
+                  color: 'var(--warning)',
+                  fontWeight: 500,
+                }}
+                title="URL-based MCP with authentication. Expand for details."
+              >
+                {Object.keys(server.headers)[0]} configured
+              </span>
+            )}
+            {/* URL-based MCP without auth and no error */}
+            {!server.tokenMetrics && !server.assessmentError && server.url && !server.headers && (
+              <span
+                style={{
+                  fontSize: '10px',
+                  padding: '2px 6px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  color: 'var(--error)',
+                  fontWeight: 500,
+                }}
+                title="URL-based MCP without authentication configured"
+              >
+                no auth
+              </span>
+            )}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
             {server.command ? `${server.command} ${(server.args || []).slice(0, 2).join(' ')}...` : server.url || 'No command'}
           </div>
-        </div>
-
-        {/* Test Button */}
-        <div onClick={(e) => e.stopPropagation()}>
-          <TestButton
-            onClick={() => setShowTestModal(true)}
-            disabled={!globalEnabled}
-            isGuarded={currentConfig.isGuarded}
-          />
         </div>
 
         {/* Guard Toggle */}
@@ -602,12 +844,8 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
         >
           <span style={{ 
             fontSize: '12px', 
-            fontWeight: 500, 
-            color: !globalEnabled 
-              ? 'var(--text-muted)' 
-              : currentConfig.isGuarded 
-                ? 'var(--success)' 
-                : 'var(--warning)' 
+            fontWeight: 400, 
+            color: 'var(--text-secondary)'
           }}>
             {!globalEnabled 
               ? (currentConfig.isGuarded ? 'Will Guard' : 'Unguarded')
@@ -617,6 +855,7 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
           <Switch 
             checked={currentConfig.isGuarded} 
             onCheckedChange={(checked) => updateConfig({ isGuarded: checked })}
+            uncheckedColor={currentConfig.isGuarded ? undefined : UNGUARDED_YELLOW}
           />
         </div>
         
@@ -629,6 +868,313 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
       {/* Expanded Configuration */}
       {isExpanded && (
         <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '16px' }} className="animate-fade-in">
+          
+          {/* Auth Failed Error - show prominently */}
+          {server.assessmentError?.type === 'auth_failed' && (
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                <ErrorIcon size={16} style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: '12px', marginBottom: '4px', color: 'var(--error)' }}>
+                    Authentication Failed
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    {server.assessmentError.message}
+                    {server.headers && (
+                      <div style={{ marginTop: '4px', color: 'var(--text-muted)' }}>
+                        Current header: <code style={{ background: 'var(--bg-primary)', padding: '1px 4px', borderRadius: '2px' }}>
+                          {Object.keys(server.headers).join(', ')}
+                        </code>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Diagnostics Preview */}
+                  {server.assessmentError.diagnostics?.responseBody && (
+                    <div style={{ marginTop: '8px' }}>
+                      <details style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                        <summary style={{ cursor: 'pointer', marginBottom: '4px' }}>Response details</summary>
+                        <pre style={{ 
+                          margin: 0, 
+                          padding: '6px', 
+                          background: 'var(--bg-primary)', 
+                          borderRadius: '4px', 
+                          overflow: 'auto', 
+                          maxHeight: '80px',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}>
+                          {server.assessmentError.diagnostics.responseBody}
+                        </pre>
+                      </details>
+                    </div>
+                  )}
+                  
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => postMessage({ type: 'openIDEConfig', source: server.source })}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        cursor: 'pointer',
+                        fontWeight: 500,
+                      }}
+                    >
+                      Open Config
+                    </button>
+                    {onTestConnection && (
+                      <button
+                        onClick={() => onTestConnection(server.name)}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid rgba(59, 130, 246, 0.5)',
+                          background: 'rgba(59, 130, 246, 0.15)',
+                          color: '#3b82f6',
+                          cursor: 'pointer',
+                          fontWeight: 500,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <BugIcon size={12} />
+                        Test Connection
+                      </button>
+                    )}
+                    <button
+                      onClick={() => postMessage({ type: 'retryAssessment', mcpName: server.name })}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid rgba(139, 92, 246, 0.5)',
+                        background: 'rgba(139, 92, 246, 0.15)',
+                        color: '#8b5cf6',
+                        cursor: 'pointer',
+                        fontWeight: 500,
+                      }}
+                    >
+                      Retry
+                    </button>
+                    {onViewLogs && (
+                      <button
+                        onClick={onViewLogs}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-color)',
+                          background: 'transparent',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          fontWeight: 500,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <TerminalIcon size={12} />
+                        View Logs
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Other Assessment Errors */}
+          {server.assessmentError && server.assessmentError.type !== 'auth_failed' && (
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(255, 215, 0, 0.08)',
+                border: '1px solid rgba(255, 215, 0, 0.3)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                <InfoIcon size={16} className={undefined} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: '12px', marginBottom: '4px', color: 'var(--warning)' }}>
+                    {server.assessmentError.type === 'connection_failed' ? 'Connection Failed' :
+                     server.assessmentError.type === 'timeout' ? 'Connection Timed Out' : 'Assessment Error'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    {server.assessmentError.message}
+                    {server.assessmentError.statusCode && (
+                      <span style={{ marginLeft: '8px', color: 'var(--text-muted)' }}>
+                        (HTTP {server.assessmentError.statusCode})
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* Diagnostics Preview */}
+                  {server.assessmentError.diagnostics?.responseBody && (
+                    <div style={{ marginTop: '8px' }}>
+                      <details style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                        <summary style={{ cursor: 'pointer', marginBottom: '4px' }}>Response details</summary>
+                        <pre style={{ 
+                          margin: 0, 
+                          padding: '6px', 
+                          background: 'var(--bg-primary)', 
+                          borderRadius: '4px', 
+                          overflow: 'auto', 
+                          maxHeight: '80px',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}>
+                          {server.assessmentError.diagnostics.responseBody}
+                        </pre>
+                      </details>
+                    </div>
+                  )}
+                  
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                    {onTestConnection && server.url && (
+                      <button
+                        onClick={() => onTestConnection(server.name)}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid rgba(59, 130, 246, 0.5)',
+                          background: 'rgba(59, 130, 246, 0.15)',
+                          color: '#3b82f6',
+                          cursor: 'pointer',
+                          fontWeight: 500,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <BugIcon size={12} />
+                        Test Connection
+                      </button>
+                    )}
+                    <button
+                      onClick={() => postMessage({ type: 'retryAssessment', mcpName: server.name })}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid rgba(139, 92, 246, 0.5)',
+                        background: 'rgba(139, 92, 246, 0.15)',
+                        color: '#8b5cf6',
+                        cursor: 'pointer',
+                        fontWeight: 500,
+                      }}
+                    >
+                      Retry
+                    </button>
+                    {onViewLogs && (
+                      <button
+                        onClick={onViewLogs}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-color)',
+                          background: 'transparent',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          fontWeight: 500,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <TerminalIcon size={12} />
+                        View Logs
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Token Assessment Status - for URL-based MCPs without metrics and no error */}
+          {!server.tokenMetrics && !server.assessmentError && server.url && (
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: server.headers ? 'rgba(255, 215, 0, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                border: `1px solid ${server.headers ? 'rgba(255, 215, 0, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                <InfoIcon size={16} className={undefined} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: '12px', marginBottom: '4px', color: server.headers ? 'var(--warning)' : 'var(--error)' }}>
+                    Tool count unavailable
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                    {server.headers ? (
+                      <>
+                        This URL-based MCP has <strong>{Object.keys(server.headers).join(', ')}</strong> configured, 
+                        but we couldn't connect to count its tools. This is normal for MCPs that require 
+                        session-based auth (like GitHub Copilot). The MCP will still work correctly when used.
+                      </>
+                    ) : (
+                      <>
+                        This URL-based MCP has no authentication headers configured. 
+                        If this MCP requires auth, add headers to your Cursor MCP config.
+                      </>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>
+                    URL: {server.url}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Token metrics display - for successfully assessed MCPs */}
+          {server.tokenMetrics && (
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(139, 92, 246, 0.08)',
+                border: '1px solid rgba(139, 92, 246, 0.25)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12px' }}>
+                <div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tools</div>
+                  <div style={{ fontWeight: 600, color: '#8b5cf6' }}>{server.tokenMetrics.toolCount}</div>
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Schema Size</div>
+                  <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{server.tokenMetrics.schemaChars.toLocaleString()} chars</div>
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Est. Tokens</div>
+                  <div style={{ fontWeight: 600, color: '#8b5cf6' }}>{server.tokenMetrics.estimatedTokens.toLocaleString()}</div>
+                </div>
+                <div style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)' }}>
+                  Assessed {new Date(server.tokenMetrics.assessedAt).toLocaleDateString()}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Network Configuration */}
           <CollapsibleSection
             title="Network Access"
@@ -787,14 +1333,6 @@ export const MCPCard: React.FC<MCPCardProps> = ({ server, config, onConfigChange
         </div>
       )}
 
-      {/* Test Prompt Modal */}
-      <TestPromptModal
-        isOpen={showTestModal}
-        onClose={() => setShowTestModal(false)}
-        mcpName={server.name}
-        testType={selectedTestType}
-        isGuarded={currentConfig.isGuarded}
-      />
     </div>
   );
 };
@@ -1357,6 +1895,425 @@ Just confirm if the tool call succeeded or failed.`,
           </Button>
         </div>
       </div>
+    </div>
+  );
+};
+
+// ====================
+// Connection Test Modal
+// ====================
+
+interface ConnectionTestModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  testResult: ConnectionTestResult | null;
+  testingMCP: string | null;
+  currentStep: string | null;
+  onViewLogs: () => void;
+  onRetry?: () => void;
+}
+
+/**
+ * Get troubleshooting tips based on error type
+ */
+function getTroubleshootingTips(error?: ConnectionTestResult['error']): string[] {
+  if (!error) return [];
+  
+  switch (error.type) {
+    case 'auth_failed':
+      return [
+        'Check that your Authorization header or API key is correct',
+        'Verify the token/key has not expired',
+        'Ensure the header name matches what the server expects (e.g., "Authorization" vs "X-API-Key")',
+        'Try generating a new token if the current one seems valid',
+      ];
+    case 'connection_failed':
+      if (error.statusCode === 400) {
+        return [
+          'HTTP 400 typically means the request format is incorrect',
+          'The MCP server may expect a different protocol version',
+          'Check if the URL endpoint is correct for MCP communication',
+          'Some MCP servers require specific headers beyond Authorization',
+        ];
+      }
+      if (error.statusCode === 404) {
+        return [
+          'The URL endpoint may be incorrect',
+          'Verify the MCP server URL in your IDE configuration',
+          'The server may have moved to a different path',
+        ];
+      }
+      if (error.statusCode && error.statusCode >= 500) {
+        return [
+          'The server is experiencing issues - try again later',
+          'Check the MCP server\'s status page if available',
+          'This may be a temporary outage',
+        ];
+      }
+      return [
+        'Check that the URL is correct and accessible',
+        'Verify your network connection and any proxy settings',
+        'The server may be down or unreachable',
+      ];
+    case 'timeout':
+      return [
+        'The server took too long to respond (>10 seconds)',
+        'Check your network connection speed',
+        'The server may be overloaded or experiencing issues',
+        'Try again later if the problem persists',
+      ];
+    default:
+      return [
+        'Review the error details in the Output panel',
+        'Check your MCP configuration in the IDE settings',
+        'Consult the MCP server documentation',
+      ];
+  }
+}
+
+export const ConnectionTestModal: React.FC<ConnectionTestModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  testResult, 
+  testingMCP,
+  currentStep,
+  onViewLogs,
+  onRetry,
+}) => {
+  if (!isOpen) return null;
+
+  const isLoading = testingMCP && !testResult;
+  const tips = testResult?.error ? getTroubleshootingTips(testResult.error) : [];
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0, 0, 0, 0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '16px',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg-primary)',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--border-color)',
+          maxWidth: '700px',
+          width: '100%',
+          maxHeight: '85vh',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        onClick={(e) => e.stopPropagation()}
+        className="animate-fade-in"
+      >
+        {/* Modal Header */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '16px 20px',
+            borderBottom: '1px solid var(--border-color)',
+            background: testResult?.success 
+              ? 'rgba(34, 197, 94, 0.1)' 
+              : testResult?.error 
+                ? 'rgba(239, 68, 68, 0.1)'
+                : 'var(--bg-secondary)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <BugIcon size={20} />
+            <div>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>
+                Connection Test {testResult ? (testResult.success ? '- Passed' : '- Failed') : ''}
+              </h3>
+              <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {testingMCP || testResult?.mcpName || 'Testing connection...'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <CloseIcon size={20} />
+          </button>
+        </div>
+
+        {/* Modal Content */}
+        <div style={{ padding: '20px', overflow: 'auto', flex: 1 }}>
+          {/* Loading State */}
+          {isLoading && (
+            <div style={{ textAlign: 'center', padding: '32px' }}>
+              <span className="loading-spinner" style={{ width: '32px', height: '32px' }} />
+              <p style={{ marginTop: '16px', color: 'var(--text-secondary)' }}>
+                {currentStep || 'Testing connection...'}
+              </p>
+            </div>
+          )}
+
+          {/* Test Results */}
+          {testResult && (
+            <>
+              {/* Summary */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  marginBottom: '20px',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  background: testResult.success 
+                    ? 'rgba(34, 197, 94, 0.1)' 
+                    : 'rgba(239, 68, 68, 0.1)',
+                  border: `1px solid ${testResult.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                }}
+              >
+                {testResult.success ? <CheckIcon size={20} /> : <ErrorIcon size={20} />}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: '14px', color: testResult.success ? 'var(--success)' : 'var(--error)' }}>
+                    {testResult.success ? 'Connection Successful' : 'Connection Failed'}
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    Completed in {testResult.durationMs}ms
+                  </div>
+                </div>
+              </div>
+
+              {/* Steps */}
+              <div style={{ marginBottom: '20px' }}>
+                <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Test Steps
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {testResult.steps.map((step, index) => (
+                    <TestStepDisplay key={index} step={step} />
+                  ))}
+                </div>
+              </div>
+
+              {/* Error Details */}
+              {testResult.error && (
+                <div style={{ marginBottom: '20px' }}>
+                  <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 600, color: 'var(--error)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Error Details
+                  </h4>
+                  <div
+                    style={{
+                      padding: '12px 16px',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'rgba(239, 68, 68, 0.05)',
+                      border: '1px solid rgba(239, 68, 68, 0.2)',
+                      fontSize: '12px',
+                    }}
+                  >
+                    <div style={{ marginBottom: '8px' }}>
+                      <span style={{ fontWeight: 600 }}>Type:</span>{' '}
+                      <code style={{ background: 'var(--bg-hover)', padding: '1px 4px', borderRadius: '3px' }}>
+                        {testResult.error.type}
+                      </code>
+                    </div>
+                    <div style={{ marginBottom: '8px' }}>
+                      <span style={{ fontWeight: 600 }}>Message:</span>{' '}
+                      {testResult.error.message}
+                    </div>
+                    {testResult.error.statusCode && (
+                      <div>
+                        <span style={{ fontWeight: 600 }}>HTTP Status:</span>{' '}
+                        {testResult.error.statusCode} {testResult.error.statusText || ''}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Troubleshooting Tips */}
+              {tips.length > 0 && (
+                <div style={{ marginBottom: '20px' }}>
+                  <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 600, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Troubleshooting Tips
+                  </h4>
+                  <ul
+                    style={{
+                      margin: 0,
+                      paddingLeft: '20px',
+                      fontSize: '12px',
+                      color: 'var(--text-secondary)',
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {tips.map((tip, index) => (
+                      <li key={index} style={{ marginBottom: '4px' }}>{tip}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Diagnostics Note */}
+              <div
+                style={{
+                  padding: '12px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-color)',
+                  fontSize: '12px',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <strong>Need more details?</strong> Click "View Logs" to see full request/response data in the Output panel.
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Modal Footer */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: '8px',
+            padding: '16px 20px',
+            borderTop: '1px solid var(--border-color)',
+            background: 'var(--bg-secondary)',
+          }}
+        >
+          <Button variant="ghost" onClick={onViewLogs}>
+            <TerminalIcon size={14} />
+            View Logs
+          </Button>
+          {testResult?.error && onRetry && (
+            <Button variant="secondary" onClick={onRetry}>
+              <RefreshIcon size={14} />
+              Retry
+            </Button>
+          )}
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Display a single test step
+ */
+const TestStepDisplay: React.FC<{ step: ConnectionTestStep }> = ({ step }) => {
+  const [expanded, setExpanded] = useState(false);
+  const hasData = step.data?.request || step.data?.response;
+
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        borderRadius: 'var(--radius-sm)',
+        background: 'var(--bg-secondary)',
+        border: `1px solid ${step.success ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          cursor: hasData ? 'pointer' : 'default',
+        }}
+        onClick={() => hasData && setExpanded(!expanded)}
+      >
+        {step.success ? (
+          <CheckIcon size={14} className={undefined} />
+        ) : (
+          <ErrorIcon size={14} style={{ color: 'var(--error)' }} />
+        )}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 500, fontSize: '12px' }}>{step.name}</div>
+          {step.details && (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {step.details}
+            </div>
+          )}
+        </div>
+        {step.durationMs !== undefined && (
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            {step.durationMs}ms
+          </span>
+        )}
+        {hasData && (
+          <ChevronDownIcon 
+            size={14} 
+            className={undefined}
+          />
+        )}
+      </div>
+
+      {/* Expanded Data */}
+      {expanded && hasData && (
+        <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)' }}>
+          {step.data?.request && (
+            <div style={{ marginBottom: '8px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
+                Request
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: '8px',
+                  fontSize: '10px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--bg-primary)',
+                  overflow: 'auto',
+                  maxHeight: '150px',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {step.data.request}
+              </pre>
+            </div>
+          )}
+          {step.data?.response && (
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
+                Response
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: '8px',
+                  fontSize: '10px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--bg-primary)',
+                  overflow: 'auto',
+                  maxHeight: '150px',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {step.data.response}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

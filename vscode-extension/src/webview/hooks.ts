@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { MCPGuardSettings, MCPServerInfo, ExtensionMessage, WebviewMessage, MCPSecurityConfig } from './types';
+import type { MCPGuardSettings, MCPServerInfo, ExtensionMessage, WebviewMessage, MCPSecurityConfig, TokenSavingsSummary, ConnectionTestResult } from './types';
 import { DEFAULT_SETTINGS } from './types';
 
 // Get VS Code API (singleton)
@@ -121,6 +121,87 @@ export function useNotifications() {
   }, []);
 
   return { notifications, dismiss };
+}
+
+/**
+ * Hook to manage token savings data
+ */
+export function useTokenSavings() {
+  const [tokenSavings, setTokenSavings] = useState<TokenSavingsSummary | null>(null);
+  const [assessingMCPs, setAssessingMCPs] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent<ExtensionMessage>) => {
+      const message = event.data;
+      
+      if (message.type === 'tokenSavings') {
+        setTokenSavings(message.data);
+      } else if (message.type === 'tokenAssessmentProgress') {
+        setAssessingMCPs(prev => {
+          const next = new Set(prev);
+          if (message.status === 'started') {
+            next.add(message.mcpName);
+          } else {
+            next.delete(message.mcpName);
+          }
+          return next;
+        });
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const assessTokens = useCallback((mcpName: string) => {
+    postMessage({ type: 'assessTokens', mcpName });
+  }, []);
+
+  return { tokenSavings, assessingMCPs, assessTokens };
+}
+
+/**
+ * Hook to manage connection testing
+ */
+export function useConnectionTest() {
+  const [testingMCP, setTestingMCP] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent<ExtensionMessage>) => {
+      const message = event.data;
+      
+      if (message.type === 'connectionTestProgress') {
+        setTestingMCP(message.mcpName);
+        setCurrentStep(message.step);
+      } else if (message.type === 'connectionTestResult') {
+        setTestResult(message.data);
+        setTestingMCP(null);
+        setCurrentStep(null);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const testConnection = useCallback((mcpName: string) => {
+    setTestResult(null);
+    setTestingMCP(mcpName);
+    setCurrentStep('Starting test...');
+    postMessage({ type: 'testConnection', mcpName });
+  }, []);
+
+  const openLogs = useCallback(() => {
+    postMessage({ type: 'openLogs' });
+  }, []);
+
+  const clearResult = useCallback(() => {
+    setTestResult(null);
+  }, []);
+
+  return { testingMCP, currentStep, testResult, testConnection, openLogs, clearResult };
 }
 
 
