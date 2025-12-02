@@ -1,7 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { MCPHandler } from '../../src/server/mcp-handler.js';
-import { ConfigManager } from '../../src/utils/config-manager.js';
-import { testConfigCleanup } from '../helpers/config-cleanup.js';
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
+import { MCPHandler } from '../../src/server/mcp-handler.js'
+import { ConfigManager } from '../../src/utils/config-manager.js'
+import { testConfigCleanup } from '../helpers/config-cleanup.js'
 
 // Mock logger
 vi.mock('../../src/utils/logger.js', () => ({
@@ -12,40 +20,40 @@ vi.mock('../../src/utils/logger.js', () => ({
     error: vi.fn(),
     level: 'info',
   },
-}));
+}))
 
 describe('Eval: GitHub MCP Isolation via MCPGuard', () => {
-  let handler: MCPHandler;
-  let configManager: ConfigManager;
-  const testMCPName = 'github-eval-test';
+  let handler: MCPHandler
+  let configManager: ConfigManager
+  const testMCPName = 'github-eval-test'
 
   beforeEach(() => {
-    handler = new MCPHandler();
-    configManager = new ConfigManager();
-    
+    handler = new MCPHandler()
+    configManager = new ConfigManager()
+
     // Track config for cleanup
-    testConfigCleanup.trackConfig(testMCPName);
-  });
+    testConfigCleanup.trackConfig(testMCPName)
+  })
 
   afterEach(async () => {
     // Give processes time to fully terminate
-    await new Promise(resolve => setTimeout(resolve, 100));
-  });
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
 
   afterAll(() => {
     // Clean up any MCP configs that were saved during tests
-    testConfigCleanup.cleanup();
-  });
+    testConfigCleanup.cleanup()
+  })
 
   /**
    * Eval test to verify Wrangler isolation is working correctly with GitHub MCP via MCPGuard.
-   * 
+   *
    * This test uses MCPGuard's interface (not directly loading the MCP) to:
-   * 1. Use MCPGuard's execute_code tool with mcp_name to auto-load GitHub MCP from config
+   * 1. Use MCPGuard's call_mcp tool with mcp_name to auto-connect GitHub MCP from config
    * 2. Execute code that uses the GitHub MCP tool to retrieve repository information
    * 3. Verifies that MCP tools work correctly through MCPGuard's isolation layer
    * 4. Verifies that direct fetch() calls are blocked (isolation working)
-   * 
+   *
    * This ensures that:
    * - MCPGuard can properly discover and load MCPs from config
    * - MCP tools can make network requests through the MCP server (allowed)
@@ -54,12 +62,12 @@ describe('Eval: GitHub MCP Isolation via MCPGuard', () => {
    */
   it('should successfully retrieve repository information via GitHub MCP through MCPGuard while maintaining isolation', async () => {
     // Skip test if wrangler is not available
-    const { execSync } = await import('node:child_process');
+    const { execSync } = await import('node:child_process')
     try {
-      execSync('npx wrangler --version', { stdio: 'ignore' });
+      execSync('npx wrangler --version', { stdio: 'ignore' })
     } catch {
-      console.warn('Skipping test: Wrangler not available');
-      return;
+      console.warn('Skipping test: Wrangler not available')
+      return
     }
 
     // First, save the GitHub MCP config so MCPGuard can discover it
@@ -67,12 +75,19 @@ describe('Eval: GitHub MCP Isolation via MCPGuard', () => {
     const githubConfig = {
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-github'],
-    };
-    
-    configManager.saveConfig(testMCPName, githubConfig);
+    }
 
-    // Use MCPGuard's execute_code tool with mcp_name to auto-load the GitHub MCP
-    // This tests MCPGuard's transparent proxy and auto-loading functionality
+    configManager.saveConfig(testMCPName, githubConfig)
+    
+    // Disable the MCP to guard it (move it to _mcpguard_disabled)
+    // This ensures it can only be accessed through MCPGuard
+    const disabled = configManager.disableMCP(testMCPName)
+    if (!disabled) {
+      throw new Error(`Failed to disable MCP ${testMCPName}`)
+    }
+
+    // Use MCPGuard's call_mcp tool with mcp_name to auto-connect the GitHub MCP
+    // This tests MCPGuard's transparent proxy and auto-connection functionality
     const code = `
       // Use GitHub MCP to search for the modelcontextprotocol repository
       // This code runs in an isolated Worker, and MCP tool calls go through MCPGuard
@@ -159,43 +174,42 @@ describe('Eval: GitHub MCP Isolation via MCPGuard', () => {
         console.log('Stack:', error.stack);
         throw error;
       }
-    `;
+    `
 
-    // Call MCPGuard's execute_code tool with mcp_name to auto-load the GitHub MCP
+    // Call MCPGuard's call_mcp tool with mcp_name to auto-connect the GitHub MCP
     // We access the private method for testing purposes
-    const handlerAny = handler as any;
+    const handlerAny = handler as any
     const result = await handlerAny.handleExecuteCode({
       mcp_name: testMCPName, // This triggers auto-loading from saved config
       code,
       timeout_ms: 60000,
-    });
+    })
 
     // Parse the result
-    const resultContent = result.content?.[0];
+    const resultContent = result.content?.[0]
     if (!resultContent || resultContent.type !== 'text') {
-      throw new Error('Unexpected result format');
+      throw new Error('Unexpected result format')
     }
 
-    const parsedResult = JSON.parse(resultContent.text);
-    
-    // Verify execution succeeded
-    expect(parsedResult.success).toBe(true);
-    expect(parsedResult.output).toBeDefined();
-    
-    // Verify that MCP tool was used successfully through MCPGuard
-    expect(parsedResult.output).toContain('SUCCESS');
-    expect(parsedResult.output).toContain('MCP tool worked through MCPGuard');
-    expect(parsedResult.output).toContain('direct fetch was blocked');
-    
-    // Verify that direct fetch() was blocked (isolation working)
-    expect(parsedResult.output).toContain('Direct fetch() correctly blocked');
-    expect(parsedResult.output).not.toContain('SECURITY BREACH');
-    
-    // Verify repository data was retrieved (indicates MCP tool worked through MCPGuard)
-    expect(parsedResult.output).toMatch(/Repository (search result|info):/);
-    
-    // Verify no errors occurred
-    expect(parsedResult.output).not.toContain('ERROR:');
-  }, 120000); // Longer timeout for MCP loading and network requests
-});
+    const parsedResult = JSON.parse(resultContent.text)
 
+    // Verify execution succeeded
+    expect(parsedResult.success).toBe(true)
+    expect(parsedResult.output).toBeDefined()
+
+    // Verify that MCP tool was used successfully through MCPGuard
+    expect(parsedResult.output).toContain('SUCCESS')
+    expect(parsedResult.output).toContain('MCP tool worked through MCPGuard')
+    expect(parsedResult.output).toContain('direct fetch was blocked')
+
+    // Verify that direct fetch() was blocked (isolation working)
+    expect(parsedResult.output).toContain('Direct fetch() correctly blocked')
+    expect(parsedResult.output).not.toContain('SECURITY BREACH')
+
+    // Verify repository data was retrieved (indicates MCP tool worked through MCPGuard)
+    expect(parsedResult.output).toMatch(/Repository (search result|info):/)
+
+    // Verify no errors occurred
+    expect(parsedResult.output).not.toContain('ERROR:')
+  }, 120000) // Longer timeout for MCP loading and network requests
+})

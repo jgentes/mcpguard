@@ -25,6 +25,12 @@ vi.mock('vscode', () => ({
     showErrorMessage: vi.fn().mockResolvedValue(undefined),
     showWarningMessage: vi.fn().mockResolvedValue(undefined),
     registerWebviewViewProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    createOutputChannel: vi.fn(() => ({
+      appendLine: vi.fn(),
+      show: vi.fn(),
+      hide: vi.fn(),
+      dispose: vi.fn(),
+    })),
   },
   commands: {
     registerCommand: vi.fn(() => ({ dispose: vi.fn() })),

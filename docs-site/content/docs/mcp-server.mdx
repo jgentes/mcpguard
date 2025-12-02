@@ -80,14 +80,15 @@ weather::get_forecast
 
 | Tool | Description |
 |------|-------------|
-| `execute_code` | Execute TypeScript code against an MCP (auto-loads MCPs if needed) |
-| `disable_mcps` | Disable MCP servers in your IDE configuration |
+| `call_mcp` | Call MCP tools by running TypeScript code in a secure sandbox (auto-connects MCPs if needed) |
+| `guard` | Guard MCP servers by routing them through MCPGuard's secure isolation |
 | `search_mcp_tools` | Discover which MCPs are configured in your IDE |
-| `load_mcp_server` | Manually load an MCP server |
-| `list_available_mcps` | List all currently loaded MCP servers |
-| `get_mcp_by_name` | Find a loaded MCP server by name |
-| `get_mcp_schema` | Get TypeScript API definition for a loaded MCP |
-| `unload_mcp_server` | Unload an MCP server |
+| `connect` | Manually connect to an MCP server |
+| `list_available_mcps` | List all currently connected MCP servers |
+| `get_mcp_by_name` | Find a connected MCP server by name |
+| `get_mcp_schema` | Get TypeScript API definition for a connected MCP |
+| `disconnect` | Disconnect from an MCP server |
+| `import_configs` | Import MCP configurations from IDE config files |
 | `get_metrics` | Get performance metrics |
 
 ## Transparent Proxy Mode
@@ -114,7 +115,7 @@ When the AI calls `github::search_repositories`:
 
 ## Direct Code Execution
 
-For complex operations, use the `execute_code` tool:
+For complex operations, use the `call_mcp` tool:
 
 ```typescript
 // AI writes code that runs in isolation
@@ -191,7 +192,7 @@ list_issues → 10,000 tokens
 Use code mode:
 
 ```typescript
-// Single execute_code call: ~750 tokens
+// Single call_mcp call: ~750 tokens
 const repos = await mcp.search_repositories({ query: 'test' });
 const filtered = repos.filter(r => r.stars > 100);
 console.log(`${filtered.length} popular repos found`);

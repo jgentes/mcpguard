@@ -624,19 +624,21 @@ export class ConfigManager {
 
     // If a specific path is provided, use it
     if (configPath) {
+      // Set the path even if file doesn't exist (useful for tests)
+      this.configPath = configPath
+      // Try to detect source from path
+      const detectedIDE = this.ideDefinitions.find(
+        (ide) =>
+          configPath.toLowerCase().includes(ide.id.replace('-', '')) ||
+          configPath
+            .toLowerCase()
+            .includes(ide.displayName.toLowerCase().replace(/\s+/g, '')),
+      )
+      if (detectedIDE) {
+        this.configSource = detectedIDE.id
+      }
+      
       if (existsSync(configPath)) {
-        this.configPath = configPath
-        // Try to detect source from path
-        const detectedIDE = this.ideDefinitions.find(
-          (ide) =>
-            configPath.toLowerCase().includes(ide.id.replace('-', '')) ||
-            configPath
-              .toLowerCase()
-              .includes(ide.displayName.toLowerCase().replace(/\s+/g, '')),
-        )
-        if (detectedIDE) {
-          this.configSource = detectedIDE.id
-        }
         const config = this.readConfigFile(configPath)
         if (config) {
           imported = Object.keys(config.mcpServers).length
@@ -650,7 +652,9 @@ export class ConfigManager {
           )
         }
       } else {
+        // File doesn't exist - return error but still set path for future operations
         errors.push(`Config file not found: ${configPath}`)
+        logger.debug({ path: configPath }, 'Config file does not exist yet, will be created on save')
       }
     } else {
       // Refresh the config file location

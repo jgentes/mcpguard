@@ -400,7 +400,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
           const extensionPath = this._extensionUri.fsPath;
           ensureMCPGuardInConfig(extensionPath);
           
-          this._postMessage({ type: 'success', message: `MCP Guard enabled - ${guardedMcps.length} MCP${guardedMcps.length === 1 ? '' : 's'} now protected` });
+          this._postMessage({ type: 'success', message: `MCP Guard enabled - ${guardedMcps.length} MCP${guardedMcps.length === 1 ? '' : 's'} now guarded` });
         } else {
           // MCP Guard is now disabled - restore all guarded MCPs to active in IDE config
           for (const config of guardedMcps) {

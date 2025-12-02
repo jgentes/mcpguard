@@ -171,12 +171,12 @@ export const App: React.FC = () => {
             </div>
             {!settings.enabled ? (
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                Protection disabled
+                Guarding disabled
               </div>
             ) : unguardedCount > 0 ? (
               <>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                  {unguardedCount} MCP{unguardedCount === 1 ? '' : 's'} need protection
+                  {unguardedCount} MCP{unguardedCount === 1 ? '' : 's'} {unguardedCount === 1 ? 'needs' : 'need'} guarding
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                   {unguardedServers.map(server => (
@@ -199,7 +199,7 @@ export const App: React.FC = () => {
               </>
             ) : (
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                All MCPs protected ✓
+                All MCPs guarded ✓
               </div>
             )}
           </div>
@@ -249,7 +249,7 @@ export const App: React.FC = () => {
             ) : guardedCount > 0 ? (
               <>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                  {guardedCount} MCP{guardedCount === 1 ? '' : 's'} protected
+                  {guardedCount} MCP{guardedCount === 1 ? '' : 's'} guarded
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                   {guardedServers.map(server => (

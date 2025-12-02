@@ -1,6 +1,6 @@
 # MCP Guard
 
-Secure isolation for MCP servers with configurable network and file system access controls.
+Use local MCP servers securely with zero-trust isolation while reducing context window token usage by up to 98%.
 
 ## Quick Start
 

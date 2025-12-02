@@ -108,7 +108,7 @@ await mcp.search_repositories({ query: 'cloudflare' })
   Here's exactly what happens when the AI generates and executes code:
 </Callout>
 
-1. **User Request**: AI calls `execute_code` with TypeScript code
+1. **User Request**: AI calls `call_mcp` with TypeScript code
 
 2. **Validation**: MCP Guard validates code for dangerous patterns
    - If blocked patterns found → Error returned immediately

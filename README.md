@@ -138,7 +138,7 @@ console.log(`Sprint Summary: ${stats.completed}/${stats.total} completed, ${stat
    To maximize efficiency and security, disable any existing MCPs in your IDE configuration. This prevents the IDE from loading all their tools into the context window unnecessarily, which is one of MCPGuard's key benefits - you only load and use the tools you actually need.
    
    **Why disable?**
-   - ⚡ **Efficiency**: Without disabling, your IDE loads all MCP tools into the context window, wasting tokens. MCPGuard only loads tools lazily when you actually use them (via `execute_code` or namespaced tool calls).
+   - ⚡ **Efficiency**: Without disabling, your IDE loads all MCP tools into the context window, wasting tokens. MCPGuard only loads tools lazily when you actually use them (via `call_mcp` or namespaced tool calls).
    - 🔒 **Security**: Ensures all tool calls route through MCPGuard's secure isolation instead of being called directly.
    
    **How to disable:**
@@ -153,7 +153,7 @@ console.log(`Sprint Summary: ${stats.completed}/${stats.total} completed, ${stat
 4. **That's it!** MCPGuard automatically:
    - Discovers all other MCPs configured in your IDE (even disabled ones)
    - Routes all tool calls through secure Worker isolation
-   - Lazy-loads MCPs when their tools are actually used (via `execute_code` or namespaced tool calls)
+   - Lazy-loads MCPs when their tools are actually used (via `call_mcp` or namespaced tool calls)
 
 **No additional setup needed!** MCPGuard uses transparent proxy mode by default - all your existing MCPs are automatically guarded without any config changes (once they're disabled).
 
@@ -359,14 +359,15 @@ Configure your AI agent (Claude Desktop, Cursor IDE, etc.):
 - All tool calls are routed through secure isolation
 
 **MCPGuard Management Tools:**
-- `execute_code` - Execute TypeScript code against an MCP (auto-loads MCPs from IDE config if needed)
-- `disable_mcps` - Disable MCP servers in your IDE configuration to maximize efficiency and security
-- `search_mcp_tools` - Discover which MCPs are configured in your IDE. Shows all configured MCPs (including disabled) with their status and available tools.
-- `load_mcp_server` - Manually load an MCP server (usually not needed - transparent proxy auto-loads)
-- `list_available_mcps` - List all currently loaded MCP servers (runtime state)
-- `get_mcp_by_name` - Find a loaded MCP server by name (more efficient than searching list_available_mcps)
-- `get_mcp_schema` - Get TypeScript API definition for a loaded MCP
-- `unload_mcp_server` - Unload an MCP server
+- `call_mcp` - Call MCP tools by running TypeScript code in a secure sandbox (auto-connects MCPs from IDE config if needed)
+- `guard` - Guard MCP servers by routing them through MCPGuard's secure isolation
+- `search_mcp_tools` - Discover which MCPs are configured in your IDE. Shows all configured MCPs (including guarded) with their status and available tools.
+- `connect` - Manually connect to an MCP server (usually not needed - transparent proxy auto-connects)
+- `list_available_mcps` - List all currently connected MCP servers (runtime state)
+- `get_mcp_by_name` - Find a connected MCP server by name (more efficient than searching list_available_mcps)
+- `get_mcp_schema` - Get TypeScript API definition for a connected MCP
+- `disconnect` - Disconnect from an MCP server
+- `import_configs` - Import MCP configurations from IDE config files
 - `get_metrics` - Get performance metrics
 
 ## 📜 License

@@ -89,7 +89,7 @@ npm run benchmark     # Run GitHub MCP comparison benchmark
 
 ### Data Flow: Code Execution
 
-1. **User Request**: User calls `execute_code` tool with `mcp_id` and TypeScript code
+1. **User Request**: User calls `call_mcp` tool with `mcp_id` and TypeScript code
 2. **Validation**: `MCPHandler` validates code for security (no `eval`, `require`, `process`, etc.)
 3. **Worker Code Generation**: `WorkerManager.executeCode()` calls `generateWorkerCode()` which creates:
    - User code embedded directly in Worker script
@@ -122,7 +122,7 @@ npm run benchmark     # Run GitHub MCP comparison benchmark
 
 ### Data Flow: MCP Loading
 
-1. User calls `load_mcp_server` with `mcp_name` and `mcp_config`
+1. User calls `connect` with `mcp_name` and `mcp_config`
 2. Check schema cache (keyed by `mcp_name` + config hash)
 3. If cached: spawn MCP process quickly, use cached schema
 4. If not cached:

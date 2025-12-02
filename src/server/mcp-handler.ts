@@ -145,16 +145,16 @@ export class MCPHandler {
       // DO NOT eagerly load all MCP tools - this defeats token efficiency!
       // Instead, load schemas lazily when tools are actually called via transparent proxy
       // This way, the IDE only sees MCPGuard's tools in the context window
-      // Individual MCP tools are loaded on-demand when execute_code is used or
+      // Individual MCP tools are loaded on-demand when call_mcp is used or
       // when a namespaced tool (e.g., github::search_repositories) is called
       // await this.loadAllMCPTools() // DISABLED for efficiency
 
       // Start with MCPGuard's own tools
       const mcpGuardTools = [
         {
-          name: 'load_mcp_server',
+          name: 'connect',
           description:
-            'Manually load an MCP server into a secure isolated Worker environment for code mode execution. Usually not needed - execute_code will auto-load MCPs when needed. Use this if you need to pre-load an MCP or load with a custom configuration. Can use a saved configuration or load with a new configuration. Automatically saves the configuration unless auto_save is false.',
+            'Manually connect to an MCP server and load it into a secure isolated Worker environment. Usually not needed - call_mcp will auto-connect when needed. Use this if you need to pre-connect to an MCP or connect with a custom configuration. Can use a saved configuration or load with a new configuration. Automatically saves the configuration unless auto_save is false.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -205,8 +205,8 @@ export class MCPHandler {
           },
         },
         {
-          name: 'execute_code',
-          description: `PRIMARY tool for interacting with MCPs. Auto-loads MCPs from IDE config if needed. Use this instead of calling MCP tools directly. All MCP operations should go through this tool for secure isolation and efficiency.
+          name: 'call_mcp',
+          description: `PRIMARY tool for interacting with MCPs. Auto-connects to MCPs from IDE config if needed. Use this instead of calling MCP tools directly. All MCP operations should go through this tool for secure isolation and efficiency.
 
 The executed code receives two parameters:
 1. 'mcp' - An object containing all available MCP tools as async functions
@@ -220,7 +220,7 @@ Usage pattern:
 
 Example:
 \`\`\`typescript
-// Search for repositories (MCP auto-loads if not already loaded)
+// Search for repositories (MCP auto-connects if not already connected)
 const repos = await mcp.search_repositories({ query: 'typescript', page: 1 });
 console.log('Found repositories:', JSON.stringify(repos, null, 2));
 
@@ -238,19 +238,19 @@ The 'mcp' object is automatically generated from the MCP's tool schema. Each too
 
 Use console.log() to output results - all console output is captured and returned in the response.
 
-IMPORTANT: Provide either mcp_name (to auto-load from IDE config) or mcp_id (if already loaded). Using mcp_name is recommended as it automatically loads the MCP when needed.`,
+IMPORTANT: Provide either mcp_name (to auto-connect from IDE config) or mcp_id (if already connected). Using mcp_name is recommended as it automatically connects to the MCP when needed.`,
           inputSchema: {
             type: 'object',
             properties: {
               mcp_id: {
                 type: 'string',
                 description:
-                  'UUID of the loaded MCP server (returned from load_mcp_server). Use if MCP is already loaded. Otherwise, use mcp_name to auto-load.',
+                  'UUID of the connected MCP server (returned from connect). Use if MCP is already connected. Otherwise, use mcp_name to auto-connect.',
               },
               mcp_name: {
                 type: 'string',
                 description:
-                  'Name of the MCP server from IDE config (e.g., "github", "filesystem"). Auto-loads the MCP if not already loaded. Use search_mcp_tools to discover available MCPs.',
+                  'Name of the MCP server from IDE config (e.g., "github", "filesystem"). Auto-connects to the MCP if not already connected. Use search_mcp_tools to discover available MCPs.',
               },
               code: {
                 type: 'string',
@@ -278,7 +278,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         {
           name: 'list_available_mcps',
           description:
-            'List all MCP servers currently loaded in Worker isolates. Returns a list with MCP IDs, names, status, and tool counts. Use get_mcp_by_name to find a specific MCP by name. Note: MCPs are auto-loaded when execute_code is called with mcp_name, so this shows actively loaded MCPs.',
+            'List all MCP servers currently connected in Worker isolates. Returns a list with MCP IDs, names, status, and tool counts. Use get_mcp_by_name to find a specific MCP by name. Note: MCPs are auto-connected when call_mcp is called with mcp_name, so this shows actively connected MCPs.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -287,7 +287,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         {
           name: 'get_mcp_by_name',
           description:
-            'Find a loaded MCP server by its name. Returns the MCP ID and basic information for quick lookup. This is more efficient than calling list_available_mcps and searching manually.',
+            'Find a connected MCP server by its name. Returns the MCP ID and basic information for quick lookup. This is more efficient than calling list_available_mcps and searching manually.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -303,7 +303,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         {
           name: 'get_mcp_schema',
           description:
-            'Get the TypeScript API definition for a loaded MCP server',
+            'Get the TypeScript API definition for a connected MCP server',
           inputSchema: {
             type: 'object',
             properties: {
@@ -316,9 +316,9 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           },
         },
         {
-          name: 'unload_mcp_server',
+          name: 'disconnect',
           description:
-            'Unload an MCP server and clean up its Worker isolate. Optionally remove from saved configurations.',
+            'Disconnect from an MCP server and clean up its Worker isolate. Optionally remove from saved configurations.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -346,7 +346,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           },
         },
         {
-          name: 'import_cursor_mcps',
+          name: 'import_configs',
           description:
             'Refresh/import MCP configurations from IDE configuration file (Claude Code, GitHub Copilot, or Cursor). Automatically discovers config location or uses provided path. Checks IDEs in priority order.',
           inputSchema: {
@@ -363,7 +363,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
         {
           name: 'search_mcp_tools',
           description:
-            'Search and discover MCP servers configured in your IDE. Returns all configured MCPs (except mcpguard) with their status and available tools. Use this to find which MCPs are available before calling execute_code. Implements the search_tools pattern for progressive disclosure - discover tools on-demand rather than loading all definitions upfront.',
+            'Search and discover MCP servers configured in your IDE. Returns all configured MCPs (except mcpguard) with their status and available tools. Use this to find which MCPs are available before calling call_mcp. Implements the search_tools pattern for progressive disclosure - discover tools on-demand rather than loading all definitions upfront.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -383,9 +383,9 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           },
         },
         {
-          name: 'disable_mcps',
+          name: 'guard',
           description:
-            "Disable MCP servers in your IDE configuration. This prevents the IDE from loading all their tools into the context window unnecessarily, maximizing efficiency and ensuring all tool calls route through MCPGuard's secure isolation. Can disable specific MCPs or all MCPs except mcpguard.",
+            "Guard MCP servers by routing them through MCPGuard's secure isolation. This prevents the IDE from loading their tools into the context window unnecessarily, maximizing efficiency and ensuring all tool calls are protected. Can guard specific MCPs or all MCPs except mcpguard.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -402,8 +402,8 @@ The code runs in an isolated Worker environment with no network access. All MCP 
 
       // Return only MCPGuard's own tools for efficiency
       // Individual MCP tools are loaded lazily when:
-      // 1. execute_code is called with mcp_name (auto-loads that specific MCP)
-      // 2. A namespaced tool is called (e.g., github::search_repositories) - loads that MCP on-demand
+      // 1. call_mcp is called with mcp_name (auto-connects that specific MCP)
+      // 2. A namespaced tool is called (e.g., github::search_repositories) - connects that MCP on-demand
       // This ensures the IDE context window only contains MCPGuard's tools, not all MCP tools
       const aggregatedTools: Array<{
         name: string
@@ -454,10 +454,10 @@ The code runs in an isolated Worker environment with no network access. All MCP 
 
         // Handle MCPGuard's own tools
         switch (name) {
-          case 'load_mcp_server':
+          case 'connect':
             return await this.handleLoadMCP(args)
 
-          case 'execute_code':
+          case 'call_mcp':
             return await this.handleExecuteCode(args)
 
           case 'list_available_mcps':
@@ -469,19 +469,19 @@ The code runs in an isolated Worker environment with no network access. All MCP 
           case 'get_mcp_schema':
             return await this.handleGetSchema(args)
 
-          case 'unload_mcp_server':
+          case 'disconnect':
             return await this.handleUnloadMCP(args)
 
           case 'get_metrics':
             return await this.handleGetMetrics()
 
-          case 'import_cursor_mcps':
+          case 'import_configs':
             return await this.handleImportCursorConfigs(args)
 
           case 'search_mcp_tools':
             return await this.handleSearchMCPTools(args)
 
-          case 'disable_mcps':
+          case 'guard':
             return await this.handleDisableMCPs(args)
 
           default: {
@@ -760,14 +760,14 @@ The code runs in an isolated Worker environment with no network access. All MCP 
             'NOT_FOUND',
             404,
             {
-              mcp_name: validated.mcp_name,
-              suggestion:
-                'Use search_mcp_tools to discover configured MCPs, or use load_mcp_server to load a new MCP.',
-            },
-          )
-        }
+            mcp_name: validated.mcp_name,
+            suggestion:
+              'Use search_mcp_tools to discover configured MCPs, or use connect to connect to a new MCP.',
+          },
+        )
+      }
 
-        // Only allow guarded (disabled) MCPs through execute_code
+      // Only allow guarded MCPs through call_mcp
         // Unguarded MCPs should be called directly by the LLM
         if (mcpEntry.status === 'active') {
           throw new MCPIsolateError(
@@ -793,7 +793,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
 
         logger.info(
           { mcp_name: validated.mcp_name },
-          'Auto-loading MCP for execute_code',
+          'Auto-connecting MCP for call_mcp',
         )
 
         // Load the MCP
@@ -1318,7 +1318,7 @@ The code runs in an isolated Worker environment with no network access. All MCP 
       }
     })
 
-    return `To use this MCP, call execute_code with code like:
+    return `To use this MCP, call call_mcp with code like:
 
 \`\`\`typescript
 const result = await mcp.${toolName}(${JSON.stringify(exampleParams, null, 2)});
@@ -1475,7 +1475,7 @@ console.log(JSON.stringify(result, null, 2));`
         failed: result.failed,
         source: sourceName,
       },
-      'MCPs disabled via disable_mcps tool',
+      'MCPs guarded via guard tool',
     )
 
     return {
@@ -1547,7 +1547,7 @@ console.log(JSON.stringify(result, null, 2));`
           {
             mcp_name: mcpName,
             suggestion:
-              'Use search_mcp_tools to discover configured MCPs, or use load_mcp_server to load a new MCP.',
+              'Use search_mcp_tools to discover configured MCPs, or use connect to connect to a new MCP.',
           },
         )
       }
@@ -1835,7 +1835,7 @@ return result;`
                 .length,
               config_path: configPath,
               config_source: configSource,
-              note: 'These MCPs are configured in your IDE. Disabled MCPs are guarded by MCPGuard and should be accessed through execute_code. Use execute_code with mcp_name to auto-load and use these MCPs.',
+              note: 'These MCPs are configured in your IDE. Guarded MCPs are protected by MCPGuard and should be accessed through call_mcp. Use call_mcp with mcp_name to auto-connect and use these MCPs.',
             },
             null,
             2,
