@@ -2,7 +2,7 @@
 
 > Use local MCP servers securely with zero-trust isolation while reducing context window token usage by up to 98%.
 
-*⚡ This implementation is based on [Code execution with MCP: Building more efficient agents](https://www.anthropic.com/engineering/code-execution-with-mcp) by Anthropic. It uses [Wrangler](https://www.npmjs.com/package/wrangler) for local MCP isolation using [Dynamic Worker Loaders](https://blog.cloudflare.com/code-mode/) as described in [Code Mode: the better way to use MCP](https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/) by Cloudflare.*
+*⚡ This implementation is based on [Code execution with MCP: Building more efficient agents](https://www.anthropic.com/engineering/code-execution-with-mcp) by Anthropic. It uses [Wrangler](https://www.npmjs.com/package/wrangler) for local MCP isolation using [Dynamic Worker Loaders](https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/) as described in [Code Mode: the better way to use MCP](https://blog.cloudflare.com/code-mode/) by Cloudflare.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
