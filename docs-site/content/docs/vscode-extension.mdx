@@ -54,7 +54,11 @@ Click on any MCP to expand its settings and configure network, file system, and 
 | **Allow Localhost** | Permit requests to localhost/127.0.0.1 |
 
 <Callout type="warning" title="Default: No Network">
-  By default, MCPs have **zero network access**. All outbound requests are blocked unless explicitly allowed.
+  By default, guarded MCP executions have **zero outbound network access**. Outbound requests are blocked unless explicitly enabled and allowlisted.
+</Callout>
+
+<Callout type="info" title="What this controls">
+  These settings control **network access from code executed inside MCP Guard’s Worker isolate**. When enabled, MCP Guard allows `fetch()` in the isolate but enforces the host allowlist (and optional localhost).
 </Callout>
 
 ### File System Access

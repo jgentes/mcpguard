@@ -15,7 +15,7 @@ MCP Guard provides defense-in-depth security through multiple protection layers.
 MCP Guard creates a **zero-trust execution environment** by combining:
 
 1. **V8 Isolate sandboxing** - OS-level process isolation
-2. **Network isolation** (`globalOutbound: null`) - Complete network lockdown
+2. **Network isolation (default)** (`globalOutbound: null`) - Deny outbound by default, with optional per-MCP allowlists
 3. **Binding-based access control** - Explicit, scoped permissions
 4. **Code validation** - Pre-execution security checks
 5. **Disposable execution environments** - No state persistence between runs
@@ -39,11 +39,11 @@ MCP Guard creates a **zero-trust execution environment** by combining:
     ```
   </Tab>
   <Tab value="Protection">
-    - ✅ `globalOutbound: null` - All `fetch()` calls throw errors
-    - ✅ No network access - Worker isolate has zero network capability
+    - ✅ Default: `globalOutbound: null` - `fetch()` calls throw errors
+    - ✅ Optional per-MCP allowlist: outbound only to explicitly allowed hosts
     - ✅ Binding-only communication - Only MCP Service Binding calls allowed
 
-    **Result:** Attack fails immediately. The `fetch()` call throws an exception.
+    **Result:** By default the attack fails immediately. If a specific MCP has network allowlisted, exfiltration is still blocked unless the attacker’s host is explicitly allowlisted.
   </Tab>
 </Tabs>
 
@@ -126,11 +126,11 @@ MCP Guard creates a **zero-trust execution environment** by combining:
     ```
   </Tab>
   <Tab value="Protection">
-    - ✅ `globalOutbound: null` - All network requests blocked
-    - ✅ No `fetch()` capability - Network APIs throw errors
+    - ✅ Default: no network - `fetch()` throws
+    - ✅ Optional per-MCP allowlist blocks access to internal/private hosts unless explicitly allowed
     - ✅ Binding-only access - Can only call explicitly allowed MCPs
 
-    **Result:** Attack fails completely. No network access means no SSRF.
+    **Result:** By default the attack fails completely. With allowlists, SSRF attempts are still blocked unless internal hosts are explicitly allowlisted.
   </Tab>
 </Tabs>
 
@@ -306,7 +306,11 @@ const DANGEROUS_PATTERNS = [
 ```typescript
 const workerConfig = {
   compatibilityDate: '2025-06-01',
-  globalOutbound: null, // ← CRITICAL: No network
+  // Default: deny outbound network
+  globalOutbound: null,
+
+  // Optional (per MCP): allow outbound and enforce a host allowlist in the isolate
+  // globalOutbound: 'allow',
   env: {
     MCP_BINDING: ctx.exports.MCPBinding({ props })
   },

@@ -45,10 +45,42 @@ mcpguard>
 | `saved` | List all saved MCP configurations |
 | `schema` | Get TypeScript API schema for an MCP |
 | `unload` | Unload an MCP server and clean up |
+| `network <mcp> on\\|off` | Enable/disable outbound network for Worker executions (guarded MCPs) |
+| `allowhost <mcp> add\\|remove <host>` | Add/remove an allowed host (e.g., `api.github.com`) |
+| `allowlocalhost <mcp> on\\|off` | Allow/deny localhost access (`localhost`/`127.0.0.1`) |
 | `conflicts` | Check for IDE MCP configuration conflicts |
 | `metrics` | Show performance metrics |
 | `help` | Show help message |
 | `exit` | Exit the CLI |
+
+## Network Access Commands
+
+MCP Guard can enforce an outbound network policy for code executed inside Worker isolates. This is **disabled by default** and can be enabled per MCP using an allowlist.
+
+<Callout type="info" title="Scope">
+  These commands affect code execution inside MCP Guard’s Worker isolate. They do not modify your IDE’s MCP server definitions.
+</Callout>
+
+### Enable/Disable Network
+
+```bash
+mcpguard> network github on
+mcpguard> network github off
+```
+
+### Allowlist Hosts
+
+```bash
+mcpguard> allowhost github add api.github.com
+mcpguard> allowhost github remove api.github.com
+```
+
+### Allow Localhost
+
+```bash
+mcpguard> allowlocalhost github on
+mcpguard> allowlocalhost github off
+```
 
 ## Testing with GitHub MCP
 

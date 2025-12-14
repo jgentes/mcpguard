@@ -26,7 +26,8 @@ MCP Guard provides defense-in-depth security by combining multiple protection la
 │                          │                 ▼                    │   │
 │                          │  ┌─────────────────────────────┐    │   │
 │                          │  │   Cloudflare Worker Isolate  │    │   │
-│                          │  │   • No network access        │    │   │
+│                          │  │   • Network: deny by default │    │   │
+│                          │  │     allowlist optional       │    │   │
 │                          │  │   • No filesystem access     │    │   │
 │                          │  │   • No env variables         │    │   │
 │                          │  │   • Memory/CPU limited       │    │   │
@@ -74,14 +75,20 @@ Code executes in a Cloudflare Workers V8 isolate:
 ```typescript
 // Worker configuration
 {
-  globalOutbound: null  // ← CRITICAL: All fetch() calls fail
+  // Default: deny all outbound requests
+  globalOutbound: null
+
+  // Optional (per MCP): allow outbound and enforce host allowlist
+  // globalOutbound: 'allow'
 }
 ```
 
-The isolate has **zero network capability**. It cannot:
+By default, the isolate has **zero network capability**. It cannot:
 - Make HTTP requests
 - Open WebSocket connections
 - Access any external resources
+
+If you enable Network Access for a specific guarded MCP, MCP Guard can allow outbound `fetch()` but will enforce a **host allowlist** (and optional localhost access) inside the isolate.
 
 ### Layer 4: Binding-Based Access Control
 
@@ -121,7 +128,8 @@ await mcp.search_repositories({ query: 'cloudflare' })
    - Metrics tracking
 
 4. **Isolate Creation**: Wrangler spawns a fresh V8 isolate:
-   - `globalOutbound: null` (no network)
+   - `globalOutbound: null` (default: no network)
+   - optional per-MCP allowlist may enable outbound `fetch()`
    - Memory and CPU limits applied
    - Service Binding injected for MCP access
 
@@ -152,8 +160,9 @@ The key to MCP Guard's security is the **Service Binding** pattern:
 ```
 ┌─────────────────────────────────┐
 │     Dynamic Worker (Isolated)    │
-│     • globalOutbound: null       │
-│     • Cannot use fetch()         │
+│     • globalOutbound: null (default) │
+│     • fetch() denied by default      │
+│     • optional allowlist enables fetch() │
 │                                  │
 │  await mcp.toolName(args)        │
 │         │                        │
