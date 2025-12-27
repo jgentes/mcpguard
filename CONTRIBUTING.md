@@ -2,10 +2,6 @@
 
 Thank you for your interest in contributing to MCP Guard! This document provides guidelines and instructions for contributing.
 
-## Code of Conduct
-
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
-
 ## Getting Started
 
 ### Prerequisites
@@ -130,7 +126,7 @@ This compiles TypeScript to JavaScript in the `dist/` directory.
    npm run test
    npm run build
    ```
-4. **Update CLAUDE.md** if you're changing architecture
+4. **Update AGENTES.md** if you're changing something significant
 
 ### Submitting a PR
 

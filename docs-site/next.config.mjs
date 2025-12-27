@@ -5,7 +5,7 @@ const withMDX = createMDX();
 /** @type {import('next').NextConfig} */
 const config = {
   reactStrictMode: true,
-  // Enable static export for Cloudflare Pages
+  // Enable static export for GitHub Pages
   output: 'export',
   images: {
     unoptimized: true,
