@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    typecheck: {
+      tsconfig: './tsconfig.test.json',
+    },
     globalSetup: './tests/helpers/setup.ts',
     globalTeardown: './tests/helpers/global-teardown.ts',
     env: {

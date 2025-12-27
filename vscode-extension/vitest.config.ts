@@ -5,6 +5,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     setupFiles: ['./tests/setup.ts'],
+    typecheck: {
+      tsconfig: './tsconfig.test.json',
+    },
     env: {
       NODE_ENV: 'test',
       VITEST: 'true',
