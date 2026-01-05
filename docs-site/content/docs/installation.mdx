@@ -82,9 +82,13 @@ For users of Cursor, Claude Code, or GitHub Copilot, you can set up MCP Guard di
     ```
 
     **Configuration file locations:**
+    - **Claude Code**: `~/.claude/mcp.jsonc` (or `%APPDATA%\Claude Code\User\globalStorage\mcp.jsonc` on Windows)
+    - **GitHub Copilot**: `~/.github/copilot/mcp.jsonc` (or `%APPDATA%\Code\User\globalStorage\github.copilot\mcp.jsonc` on Windows)
     - **Cursor**: `~/.cursor/mcp.jsonc` (or `%APPDATA%\Cursor\User\globalStorage\mcp.jsonc` on Windows)
-    - **Claude Code**: `~/.config/claude-code/mcp.jsonc` (or `%APPDATA%\Claude Code\User\globalStorage\mcp.jsonc` on Windows)
-    - **GitHub Copilot**: `~/.github/copilot/mcp.jsonc` (or `%APPDATA%\GitHub Copilot\mcp.jsonc` on Windows)
+    
+    <Callout type="info" title="Multiple Paths Supported">
+      MCP Guard checks multiple locations for each IDE in priority order. The paths shown above are the primary locations, but fallback paths are also supported.
+    </Callout>
   </Tab>
 </Tabs>
 

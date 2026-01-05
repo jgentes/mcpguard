@@ -39,11 +39,14 @@ MCP Guard creates a **zero-trust execution environment** by combining:
     ```
   </Tab>
   <Tab value="Protection">
-    - ✅ Default: `globalOutbound: null` - `fetch()` calls throw errors
-    - ✅ Optional per-MCP allowlist: outbound only to explicitly allowed hosts
+    - ✅ Default: `globalOutbound: null` - `fetch()` does not exist, calls throw errors
+    - ✅ Three-layer network enforcement when enabled:
+      1. Runtime isolation: `globalOutbound: null` (no native fetch)
+      2. Module-level wrapper: Injected fetch adds allowlist headers
+      3. FetchProxy Service Binding: Enforces host allowlist in parent Worker
     - ✅ Binding-only communication - Only MCP Service Binding calls allowed
 
-    **Result:** By default the attack fails immediately. If a specific MCP has network allowlisted, exfiltration is still blocked unless the attacker’s host is explicitly allowlisted.
+    **Result:** By default the attack fails immediately. If a specific MCP has network allowlisted, exfiltration is still blocked unless the attacker's host is explicitly allowlisted.
   </Tab>
 </Tabs>
 
@@ -126,7 +129,8 @@ MCP Guard creates a **zero-trust execution environment** by combining:
     ```
   </Tab>
   <Tab value="Protection">
-    - ✅ Default: no network - `fetch()` throws
+    - ✅ Default: no network - `fetch()` does not exist, throws errors
+    - ✅ Three-layer enforcement when network enabled: FetchProxy Service Binding validates all requests
     - ✅ Optional per-MCP allowlist blocks access to internal/private hosts unless explicitly allowed
     - ✅ Binding-only access - Can only call explicitly allowed MCPs
 

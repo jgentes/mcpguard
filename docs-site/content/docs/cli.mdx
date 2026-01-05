@@ -37,17 +37,24 @@ mcpguard>
 
 | Command | Description |
 |---------|-------------|
-| `load` | Load an MCP server into an isolated Worker |
-| `execute` | Execute TypeScript code against a loaded MCP |
+| `status` | Show at-a-glance MCP Guard status (counts, token savings, quick actions) |
+| `savings` | Detailed token savings analysis with per-MCP breakdown |
+| `guard <mcp>` | Enable MCPGuard protection for an MCP (use `--all` for all MCPs) |
+| `unguard <mcp>` | Disable MCPGuard protection for an MCP (use `--all` for all MCPs) |
+| `network <mcp> on\|off` | Enable/disable Worker outbound network for a guarded MCP |
+| `allowhost <mcp> add\|remove <host>` | Add/remove an allowed host (e.g., `api.github.com`) |
+| `allowlocalhost <mcp> on\|off` | Allow/deny localhost access (`localhost`/`127.0.0.1`) |
+| `configure` | View security configuration for an MCP |
+| `diagnose` | Step-by-step connection diagnostics for an MCP |
+| `load` | Load an MCP server (shows saved configs, auto-saves new ones) |
 | `test` | Interactively test MCP tools (select tool, enter args, execute via Wrangler) |
-| `test-direct` | Test MCP directly without Wrangler/Worker isolation |
+| `test-direct` | Test MCP directly without Wrangler/Worker isolation (uses saved configs) |
+| `execute` | Execute custom TypeScript code against a loaded MCP |
 | `list` | List all loaded MCP servers |
 | `saved` | List all saved MCP configurations |
+| `delete` | Delete a saved MCP configuration |
 | `schema` | Get TypeScript API schema for an MCP |
 | `unload` | Unload an MCP server and clean up |
-| `network &lt;mcp&gt; on|off` | Enable/disable outbound network for Worker executions (guarded MCPs) |
-| `allowhost &lt;mcp&gt; add|remove &lt;host&gt;` | Add/remove an allowed host (e.g., `api.github.com`) |
-| `allowlocalhost &lt;mcp&gt; on|off` | Allow/deny localhost access (`localhost`/`127.0.0.1`) |
 | `conflicts` | Check for IDE MCP configuration conflicts |
 | `metrics` | Show performance metrics |
 | `help` | Show help message |
@@ -82,7 +89,40 @@ mcpguard> allowlocalhost github on
 mcpguard> allowlocalhost github off
 ```
 
-## Testing with GitHub MCP
+## Common Workflows
+
+### Quick Status Check
+
+```bash
+mcpguard> status
+```
+
+Shows:
+- Number of MCPs discovered
+- Protection status
+- Token savings estimate
+- Quick action suggestions
+
+### Protect All MCPs
+
+```bash
+mcpguard> guard --all
+```
+
+Enables MCPGuard protection for all discovered MCPs, maximizing token savings and security.
+
+### View Token Savings
+
+```bash
+mcpguard> savings
+```
+
+Shows detailed breakdown of token savings per MCP, including:
+- Current token usage
+- Estimated savings with MCPGuard
+- Percentage reduction
+
+### Testing with GitHub MCP
 
 <Steps>
 

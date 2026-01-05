@@ -14,23 +14,9 @@ MCP Guard can run as an MCP server itself, providing secure isolation for all yo
 
 Add MCP Guard to your IDE's MCP configuration:
 
-<Tabs items={['Cursor', 'Claude Desktop', 'GitHub Copilot']}>
-  <Tab value="Cursor">
-    **File:** `~/.cursor/mcp.jsonc` (or `%APPDATA%\Cursor\User\globalStorage\mcp.jsonc` on Windows)
-
-    ```json
-    {
-      "mcpServers": {
-        "mcpguard": {
-          "command": "npx",
-          "args": ["-y", "mcpguard"]
-        }
-      }
-    }
-    ```
-  </Tab>
-  <Tab value="Claude Desktop">
-    **File:** `~/.config/claude/claude_desktop_config.json` (or `%APPDATA%\Claude\claude_desktop_config.json` on Windows)
+<Tabs items={['Claude Code', 'GitHub Copilot', 'Cursor']}>
+  <Tab value="Claude Code">
+    **File:** `~/.claude/mcp.jsonc` (or `%APPDATA%\Claude Code\User\globalStorage\mcp.jsonc` on Windows)
 
     ```json
     {
@@ -44,7 +30,21 @@ Add MCP Guard to your IDE's MCP configuration:
     ```
   </Tab>
   <Tab value="GitHub Copilot">
-    **File:** `~/.github/copilot/mcp.jsonc`
+    **File:** `~/.github/copilot/mcp.jsonc` (or `%APPDATA%\Code\User\globalStorage\github.copilot\mcp.jsonc` on Windows)
+
+    ```json
+    {
+      "mcpServers": {
+        "mcpguard": {
+          "command": "npx",
+          "args": ["-y", "mcpguard"]
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab value="Cursor">
+    **File:** `~/.cursor/mcp.jsonc` (or `%APPDATA%\Cursor\User\globalStorage\mcp.jsonc` on Windows)
 
     ```json
     {

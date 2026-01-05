@@ -78,8 +78,8 @@ Code executes in a Cloudflare Workers V8 isolate:
   // Default: deny all outbound requests
   globalOutbound: null
 
-  // Optional (per MCP): allow outbound and enforce host allowlist
-  // globalOutbound: 'allow'
+  // Optional (per MCP): when network enabled, globalOutbound set to FetchProxy Service Binding
+  // FetchProxy enforces host allowlist and optional localhost access
 }
 ```
 
@@ -88,7 +88,21 @@ By default, the isolate has **zero network capability**. It cannot:
 - Open WebSocket connections
 - Access any external resources
 
-If you enable Network Access for a specific guarded MCP, MCP Guard can allow outbound `fetch()` but will enforce a **host allowlist** (and optional localhost access) inside the isolate.
+**Three-Layer Network Access Enforcement** (when network enabled via settings):
+
+1. **Layer 1: Runtime Isolation** - Dynamic workers ALWAYS have `globalOutbound: null`. `globalThis.fetch` does NOT exist natively.
+
+2. **Layer 2: Module-Level Fetch Wrapper** - When network enabled, `generateWorkerCode()` injects a wrapper that:
+   - Uses `Object.defineProperty` to define `globalThis.fetch`
+   - Adds `X-MCPGuard-Allowed-Hosts` and `X-MCPGuard-Allow-Localhost` headers
+   - Delegates to `env.FETCH_PROXY.fetch()` Service Binding
+
+3. **Layer 3: FetchProxy Service Binding** - Runs in parent Worker (has network access):
+   - Reads allowlist from headers
+   - Enforces rules (exact match, wildcard `*.github.com`, localhost blocking)
+   - Returns 403 JSON error if blocked, otherwise proxies via parent's `fetch()`
+
+If you enable Network Access for a specific guarded MCP, MCP Guard uses this three-layer approach to allow controlled `fetch()` while enforcing a **host allowlist** (and optional localhost access).
 
 ### Layer 4: Binding-Based Access Control
 
