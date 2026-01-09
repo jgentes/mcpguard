@@ -183,7 +183,7 @@ export type WebviewMessage =
   | { type: 'getSettings' }
   | { type: 'getMCPServers' }
   | { type: 'saveSettings'; data: MCPGuardSettings }
-  | { type: 'saveMCPConfig'; data: MCPSecurityConfig }
+  | { type: 'saveMCPConfig'; data: MCPSecurityConfig; source?: 'claude' | 'copilot' | 'cursor' }
   | { type: 'importFromIDE' }
   | { type: 'refreshMCPs' }
   | { type: 'openMCPGuardDocs' }
@@ -193,7 +193,7 @@ export type WebviewMessage =
   | { type: 'openLogs' }
   | { type: 'testConnection'; mcpName: string }
   | { type: 'openExternalLink'; url: string }
-  | { type: 'deleteMCP'; mcpName: string }
+  | { type: 'deleteMCP'; mcpName: string; source?: 'claude' | 'copilot' | 'cursor' }
   | { type: 'addMCP'; name: string; config: MCPConfigInput }
   | { type: 'invalidateCache'; mcpName: string }
   | { type: 'checkVersion'; mcpName: string };

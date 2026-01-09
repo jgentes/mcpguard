@@ -26,8 +26,8 @@ export const App: React.FC = () => {
     saveSettings(newSettings);
   };
 
-  const handleConfigChange = (config: MCPSecurityConfig) => {
-    saveMCPConfig(config);
+  const handleConfigChange = (config: MCPSecurityConfig, source?: 'claude' | 'copilot' | 'cursor') => {
+    saveMCPConfig(config, source);
   };
 
   const handleToggleExpanded = (mcpName: string) => {

@@ -2112,7 +2112,7 @@ const VersionConfigSection: React.FC<VersionConfigSectionProps> = ({
 interface MCPCardProps {
   server: MCPServerInfo
   config?: MCPSecurityConfig
-  onConfigChange: (config: MCPSecurityConfig) => void
+  onConfigChange: (config: MCPSecurityConfig, source?: 'claude' | 'copilot' | 'cursor') => void
   currentIDE?: string // The IDE we're currently running in
   globalEnabled?: boolean // Whether MCP Guard is globally enabled
   onTestConnection?: (mcpName: string) => void // Callback to test connection
@@ -2149,13 +2149,15 @@ export const MCPCard: React.FC<MCPCardProps> = ({
 
   const updateConfig = useCallback(
     (updates: Partial<MCPSecurityConfig>) => {
+      // Pass server.source to ensure modifications go to the correct IDE config
+      const source = server.source !== 'unknown' ? server.source as 'claude' | 'copilot' | 'cursor' : undefined
       onConfigChange({
         ...currentConfig,
         ...updates,
         lastModified: new Date().toISOString(),
-      })
+      }, source)
     },
-    [currentConfig, onConfigChange],
+    [currentConfig, onConfigChange, server.source],
   )
 
   const sourceColors: Record<string, string> = {
@@ -2244,22 +2246,21 @@ export const MCPCard: React.FC<MCPCardProps> = ({
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontWeight: 600 }}>{server.name}</span>
-            {/* Only show source tag if from a different IDE */}
-            {server.source !== currentIDE && (
-              <span
-                style={{
-                  fontSize: '10px',
-                  padding: '2px 6px',
-                  borderRadius: 'var(--radius-sm)',
-                  background:
-                    sourceColors[server.source] || sourceColors.unknown,
-                  color: 'white',
-                  textTransform: 'uppercase',
-                  fontWeight: 600,
-                }}
-              >
-                {server.source}
-              </span>
+            {/* Source IDE indicator - only shown when MCP is from a different IDE */}
+            {server.source !== currentIDE && server.source !== 'unknown' && (
+              <>
+                <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>|</span>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    color: sourceColors[server.source] || 'var(--text-muted)',
+                    fontWeight: 500,
+                  }}
+                  title={`Loaded from ${server.source === 'claude' ? 'Claude Code' : server.source === 'copilot' ? 'GitHub Copilot' : 'Cursor'} config`}
+                >
+                  {server.source === 'claude' ? 'Claude' : server.source === 'copilot' ? 'Copilot' : 'Cursor'}
+                </span>
+              </>
             )}
             {/* Token count badge - successfully assessed (only if no version info) */}
             {server.tokenMetrics && !server.tokenMetrics.packageName && (

@@ -48,7 +48,7 @@ export function useSettings() {
     postMessage({ type: 'saveSettings', data: newSettings });
   }, []);
 
-  const saveMCPConfig = useCallback((config: MCPSecurityConfig) => {
+  const saveMCPConfig = useCallback((config: MCPSecurityConfig, source?: 'claude' | 'copilot' | 'cursor') => {
     // Optimistically update local settings state immediately
     setSettings(prev => {
       const existingIndex = prev.mcpConfigs.findIndex(c => c.id === config.id || c.mcpName === config.mcpName);
@@ -66,8 +66,8 @@ export function useSettings() {
       };
     });
 
-    // Send to backend
-    postMessage({ type: 'saveMCPConfig', data: config });
+    // Send to backend with source for source-based config modification
+    postMessage({ type: 'saveMCPConfig', data: config, source });
   }, []);
 
   return { settings, setSettings, isLoading, saveSettings, saveMCPConfig };

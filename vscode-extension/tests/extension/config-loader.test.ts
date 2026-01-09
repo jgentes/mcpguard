@@ -272,7 +272,7 @@ describe('config-loader', () => {
       expect(configPath).toBeNull();
     });
 
-    it('should prefer Cursor config over others', () => {
+    it('should prefer Claude config over others', () => {
       const claudePath = getTestConfigPath('claude');
       const cursorPath = getTestConfigPath('cursor');
       
@@ -280,7 +280,8 @@ describe('config-loader', () => {
       addMockFile(cursorPath, createSampleMCPConfig({}));
 
       const configPath = getPrimaryIDEConfigPath();
-      expect(configPath).toBe(cursorPath);
+      // Claude has highest priority
+      expect(configPath).toBe(claudePath);
     });
 
     it('should fall back to Claude if Cursor not available', () => {
@@ -978,6 +979,165 @@ describe('config-loader', () => {
       expect(result.success).toBe(true);
       expect(getMCPStatus('to-delete')).toBe('not_found');
       expect(getMCPStatus('to-keep')).toBe('active');
+    });
+  });
+
+  describe('Priority Order (Claude > Cursor > Copilot)', () => {
+    it('should prioritize Claude over Cursor when deduplicating MCPs', () => {
+      const claudePath = getTestConfigPath('claude');
+      const cursorPath = getTestConfigPath('cursor');
+      
+      addMockFile(claudePath, createSampleMCPConfig({
+        'shared-mcp': { command: 'claude-command' },
+      }));
+      addMockFile(cursorPath, createSampleMCPConfig({
+        'shared-mcp': { command: 'cursor-command' },
+      }));
+
+      const mcps = loadAllMCPServers();
+      
+      // Claude should take priority over Cursor
+      expect(mcps).toHaveLength(1);
+      expect(mcps[0].command).toBe('claude-command');
+      expect(mcps[0].source).toBe('claude');
+    });
+
+    it('should prioritize Cursor over Copilot when deduplicating MCPs', () => {
+      const cursorPath = getTestConfigPath('cursor');
+      const copilotPath = getTestConfigPath('copilot');
+      
+      addMockFile(cursorPath, createSampleMCPConfig({
+        'shared-mcp': { command: 'cursor-command' },
+      }));
+      addMockFile(copilotPath, createSampleMCPConfig({
+        'shared-mcp': { command: 'copilot-command' },
+      }));
+
+      const mcps = loadAllMCPServers();
+      
+      // Cursor should take priority over Copilot
+      expect(mcps).toHaveLength(1);
+      expect(mcps[0].command).toBe('cursor-command');
+      expect(mcps[0].source).toBe('cursor');
+    });
+
+    it('should use Claude > Cursor > Copilot priority for getPrimaryIDEConfigPath', () => {
+      const claudePath = getTestConfigPath('claude');
+      const cursorPath = getTestConfigPath('cursor');
+      const copilotPath = getTestConfigPath('copilot');
+      
+      // Only Copilot exists -> should return Copilot
+      addMockFile(copilotPath, createSampleMCPConfig({}));
+      expect(getPrimaryIDEConfigPath()).toBe(copilotPath);
+      
+      // Add Cursor -> should now return Cursor
+      addMockFile(cursorPath, createSampleMCPConfig({}));
+      expect(getPrimaryIDEConfigPath()).toBe(cursorPath);
+      
+      // Add Claude -> should now return Claude
+      addMockFile(claudePath, createSampleMCPConfig({}));
+      expect(getPrimaryIDEConfigPath()).toBe(claudePath);
+    });
+  });
+
+  describe('Source-based Config Modification', () => {
+    it('should disable MCP in correct IDE config when source is specified', () => {
+      const claudePath = getTestConfigPath('claude');
+      const cursorPath = getTestConfigPath('cursor');
+      
+      addMockFile(claudePath, createSampleMCPConfig({
+        'claude-mcp': { command: 'node', args: ['claude.js'] },
+      }));
+      addMockFile(cursorPath, createSampleMCPConfig({
+        'cursor-mcp': { command: 'node', args: ['cursor.js'] },
+      }));
+
+      // Disable cursor-mcp with source='cursor'
+      const result = disableMCPInIDE('cursor-mcp', 'cursor');
+      expect(result.success).toBe(true);
+      
+      // Verify it was disabled in cursor config
+      const cursorConfig = JSON.parse(getMockFileContent(cursorPath)!);
+      expect(cursorConfig.mcpServers['cursor-mcp']).toBeUndefined();
+      expect(cursorConfig._mcpguard_disabled?.['cursor-mcp']).toBeDefined();
+      
+      // Verify claude config wasn't touched
+      const claudeConfig = JSON.parse(getMockFileContent(claudePath)!);
+      expect(claudeConfig.mcpServers['claude-mcp']).toBeDefined();
+    });
+
+    it('should enable MCP in correct IDE config when source is specified', () => {
+      const claudePath = getTestConfigPath('claude');
+      const cursorPath = getTestConfigPath('cursor');
+      
+      addMockFile(claudePath, createSampleMCPConfig({}, {
+        _mcpguard_disabled: {
+          'claude-mcp': { command: 'node', args: ['claude.js'] },
+        },
+      }));
+      addMockFile(cursorPath, createSampleMCPConfig({}, {
+        _mcpguard_disabled: {
+          'cursor-mcp': { command: 'node', args: ['cursor.js'] },
+        },
+      }));
+
+      // Enable cursor-mcp with source='cursor'
+      const result = enableMCPInIDE('cursor-mcp', 'cursor');
+      expect(result.success).toBe(true);
+      
+      // Verify it was enabled in cursor config
+      const cursorConfig = JSON.parse(getMockFileContent(cursorPath)!);
+      expect(cursorConfig.mcpServers['cursor-mcp']).toBeDefined();
+      expect(cursorConfig._mcpguard_disabled?.['cursor-mcp']).toBeUndefined();
+      
+      // Verify claude config wasn't touched
+      const claudeConfig = JSON.parse(getMockFileContent(claudePath)!);
+      expect(claudeConfig._mcpguard_disabled?.['claude-mcp']).toBeDefined();
+    });
+
+    it('should delete MCP from correct IDE config when source is specified', () => {
+      const claudePath = getTestConfigPath('claude');
+      const cursorPath = getTestConfigPath('cursor');
+      
+      addMockFile(claudePath, createSampleMCPConfig({
+        'claude-mcp': { command: 'node' },
+      }));
+      addMockFile(cursorPath, createSampleMCPConfig({
+        'cursor-mcp': { command: 'python' },
+      }));
+
+      // Delete cursor-mcp with source='cursor'
+      const result = deleteMCPFromIDE('cursor-mcp', 'cursor');
+      expect(result.success).toBe(true);
+      
+      // Verify it was deleted from cursor config
+      const cursorConfig = JSON.parse(getMockFileContent(cursorPath)!);
+      expect(cursorConfig.mcpServers['cursor-mcp']).toBeUndefined();
+      
+      // Verify claude config wasn't touched
+      const claudeConfig = JSON.parse(getMockFileContent(claudePath)!);
+      expect(claudeConfig.mcpServers['claude-mcp']).toBeDefined();
+    });
+
+    it('should fall back to primary IDE config when source is not specified', () => {
+      const claudePath = getTestConfigPath('claude');
+      const cursorPath = getTestConfigPath('cursor');
+      
+      addMockFile(claudePath, createSampleMCPConfig({
+        'test-mcp': { command: 'node' },
+      }));
+      addMockFile(cursorPath, createSampleMCPConfig({
+        'other-mcp': { command: 'python' },
+      }));
+
+      // Disable without specifying source - should use primary (Claude)
+      const result = disableMCPInIDE('test-mcp');
+      expect(result.success).toBe(true);
+      
+      // Verify it was disabled in Claude config (primary)
+      const claudeConfig = JSON.parse(getMockFileContent(claudePath)!);
+      expect(claudeConfig.mcpServers['test-mcp']).toBeUndefined();
+      expect(claudeConfig._mcpguard_disabled?.['test-mcp']).toBeDefined();
     });
   });
 });

@@ -322,7 +322,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
         break
 
       case 'saveMCPConfig':
-        await this._saveMCPConfig(message.data)
+        await this._saveMCPConfig(message.data, message.source)
         break
 
       case 'importFromIDE':
@@ -382,7 +382,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
         break
 
       case 'deleteMCP':
-        await this._deleteMCP(message.mcpName)
+        await this._deleteMCP(message.mcpName, message.source)
         break
 
       case 'addMCP':
@@ -529,9 +529,14 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
 
   /**
    * Delete an MCP from the IDE config with confirmation
+   * @param mcpName Name of the MCP to delete
+   * @param source Source IDE to modify - if provided, deletes from that specific IDE's config
    */
-  private async _deleteMCP(mcpName: string): Promise<void> {
-    this._log(`Delete MCP requested: ${mcpName}`)
+  private async _deleteMCP(
+    mcpName: string,
+    source?: 'claude' | 'copilot' | 'cursor',
+  ): Promise<void> {
+    this._log(`Delete MCP requested: ${mcpName}${source ? ` from ${source}` : ''}`)
 
     // Show confirmation dialog
     const confirm = await vscode.window.showWarningMessage(
@@ -545,7 +550,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
       return
     }
 
-    const result = deleteMCPFromIDE(mcpName)
+    const result = deleteMCPFromIDE(mcpName, source)
 
     if (result.success) {
       this._postMessage({ type: 'success', message: result.message })
@@ -802,8 +807,13 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
   /**
    * Save a single MCP config and update IDE config if guard status changed
    * isGuarded is derived from IDE config - when toggled, we update IDE config
+   * @param config MCP security configuration
+   * @param source Source IDE to modify - if provided, modifies that specific IDE's config
    */
-  private async _saveMCPConfig(config: MCPSecurityConfig): Promise<void> {
+  private async _saveMCPConfig(
+    config: MCPSecurityConfig,
+    source?: 'claude' | 'copilot' | 'cursor',
+  ): Promise<void> {
     try {
       const settingsPath = getSettingsPath()
       let settings = loadSettingsWithHydration(settingsPath)
@@ -821,9 +831,9 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
 
         if (isNowGuarded) {
           // Disable MCP in IDE config (move to _mcpguard_disabled)
-          const result = disableMCPInIDE(config.mcpName)
+          const result = disableMCPInIDE(config.mcpName, source)
           if (result.success) {
-            console.log(`MCP Guard: ${config.mcpName} disabled in IDE config`)
+            console.log(`MCP Guard: ${config.mcpName} disabled in IDE config${source ? ` (${source})` : ''}`)
           } else {
             console.warn(
               `MCP Guard: Failed to disable ${config.mcpName} in IDE: ${result.message}`,
@@ -835,9 +845,9 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
           ensureMCPGuardInConfig(extensionPath)
         } else {
           // Enable MCP in IDE config (restore from _mcpguard_disabled)
-          const result = enableMCPInIDE(config.mcpName)
+          const result = enableMCPInIDE(config.mcpName, source)
           if (result.success) {
-            console.log(`MCP Guard: ${config.mcpName} enabled in IDE config`)
+            console.log(`MCP Guard: ${config.mcpName} enabled in IDE config${source ? ` (${source})` : ''}`)
           } else {
             console.warn(
               `MCP Guard: Failed to enable ${config.mcpName} in IDE: ${result.message}`,

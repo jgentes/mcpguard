@@ -124,10 +124,12 @@ FetchProxy (parent Worker) → allowlist check → real fetch() or 403
 
 Imports MCP configs from IDE config files in priority order:
 1. Claude Code: `~/.claude/mcp.json` or `~/.claude/mcp.jsonc`
-2. GitHub Copilot: `~/.github/copilot/mcp.json` or `~/.github/copilot/mcp.jsonc`
-3. Cursor: `~/.cursor/mcp.json` or `~/.cursor/mcp.jsonc`
+2. Cursor: `~/.cursor/mcp.json` or `~/.cursor/mcp.jsonc`
+3. GitHub Copilot: `~/.github/copilot/mcp.json` or `~/.github/copilot/mcp.jsonc`
 
 Platform-specific fallback paths are also supported (e.g., `%APPDATA%/Claude Code/User/globalStorage/mcp.json` on Windows).
+
+**Source-based Config Modification**: When modifying MCP configurations (disable/enable/delete), the VSCode extension tracks which IDE each MCP came from and modifies the correct config file. This ensures that modifying an MCP from Cursor doesn't accidentally modify the Claude Code config file when both exist.
 
 ### Wrangler Integration
 
