@@ -61,11 +61,35 @@ export interface MCPTokenMetrics {
 }
 
 /**
+ * OAuth protected resource metadata (from /.well-known/oauth-protected-resource or WWW-Authenticate header)
+ * See RFC 9728: OAuth 2.0 Protected Resource Metadata
+ */
+export interface MCPOAuthMetadata {
+  /** Resource identifier (usually the MCP server URL) */
+  resource?: string;
+  /** List of authorization server URLs that can be used */
+  authorization_servers?: string[];
+  /** OAuth 2.0 scopes required to access the resource */
+  scopes_supported?: string[];
+  /** Bearer token type methods supported */
+  bearer_methods_supported?: string[];
+  /** Resource documentation URL */
+  resource_documentation?: string;
+  /** How OAuth was detected: 'well-known' or 'www-authenticate' */
+  detectedVia?: 'well-known' | 'www-authenticate';
+  /** Raw WWW-Authenticate header value if detected via header */
+  wwwAuthenticate?: string;
+  /** When this metadata was discovered */
+  discoveredAt: string;
+}
+
+
+/**
  * Assessment error info for MCPs that failed assessment
  */
 export interface MCPAssessmentError {
-  /** Error type */
-  type: 'auth_failed' | 'connection_failed' | 'timeout' | 'unknown';
+  /** Error type - 'oauth_required' indicates OAuth flow is needed */
+  type: 'auth_failed' | 'oauth_required' | 'connection_failed' | 'timeout' | 'unknown';
   /** Human-readable message */
   message: string;
   /** HTTP status code if applicable */
@@ -74,6 +98,8 @@ export interface MCPAssessmentError {
   statusText?: string;
   /** When this error occurred */
   errorAt: string;
+  /** OAuth metadata if OAuth is required */
+  oauthMetadata?: MCPOAuthMetadata;
   /** Diagnostic details for troubleshooting */
   diagnostics?: {
     /** URL that was requested */

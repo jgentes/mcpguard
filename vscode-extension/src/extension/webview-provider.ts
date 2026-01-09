@@ -133,11 +133,8 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
     if (!this._view) return
 
     if (this._mcpCount === 0) {
-      // Show warning badge when no MCPs found
-      this._view.badge = {
-        tooltip: 'No MCP servers detected - click to import',
-        value: '!',
-      }
+      // Hide badge when no MCPs found (0 would be misleading)
+      this._view.badge = undefined
     } else {
       // Show count badge
       this._view.badge = {

@@ -2278,7 +2278,24 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                 {server.tokenMetrics.estimatedTokens.toLocaleString()} tokens
               </span>
             )}
-            {/* Assessment error - auth failed */}
+            {/* Assessment error - OAuth required (not supported) */}
+            {!server.tokenMetrics &&
+              server.assessmentError?.type === 'oauth_required' && (
+                <span
+                  style={{
+                    fontSize: '10px',
+                    padding: '2px 6px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid rgba(249, 115, 22, 0.5)',
+                    color: '#f97316',
+                    fontWeight: 500,
+                  }}
+                  title="OAuth MCPs cannot be guarded by MCPGuard"
+                >
+                  Cannot Guard
+                </span>
+              )}
+            {/* Assessment error - auth failed (no OAuth discovered) */}
             {!server.tokenMetrics &&
               server.assessmentError?.type === 'auth_failed' && (
                 <span
@@ -2298,7 +2315,8 @@ export const MCPCard: React.FC<MCPCardProps> = ({
             {/* Assessment error - other errors */}
             {!server.tokenMetrics &&
               server.assessmentError &&
-              server.assessmentError.type !== 'auth_failed' && (
+              server.assessmentError.type !== 'auth_failed' &&
+              server.assessmentError.type !== 'oauth_required' && (
                 <span
                   style={{
                     fontSize: '10px',
@@ -2486,31 +2504,68 @@ export const MCPCard: React.FC<MCPCardProps> = ({
           onClick={(e) => e.stopPropagation()}
           style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
         >
-          <span
-            style={{
-              fontSize: '12px',
-              fontWeight: 400,
-              color: 'var(--text-secondary)',
-            }}
-          >
-            {!globalEnabled
-              ? currentConfig.isGuarded
-                ? 'Will Guard'
-                : 'Unguarded'
-              : currentConfig.isGuarded
-                ? 'Guarded'
-                : 'Unguarded'}
-          </span>
-          <Switch
-            checked={currentConfig.isGuarded}
-            onCheckedChange={(checked) => updateConfig({ isGuarded: checked })}
-            uncheckedColor={
-              currentConfig.isGuarded ? undefined : UNGUARDED_YELLOW
-            }
-          />
+          {/* Show special state for OAuth MCPs - they can't be guarded */}
+          {server.assessmentError?.type === 'oauth_required' ? (
+            <span
+              style={{
+                fontSize: '11px',
+                fontWeight: 500,
+                color: '#f97316',
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(249, 115, 22, 0.15)',
+              }}
+              title="OAuth MCPs are not supported by MCPGuard"
+            >
+              OAuth Not Supported
+            </span>
+          ) : (
+            <>
+              <span
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 400,
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {!globalEnabled
+                  ? currentConfig.isGuarded
+                    ? 'Will Guard'
+                    : 'Unguarded'
+                  : currentConfig.isGuarded
+                    ? 'Guarded'
+                    : 'Unguarded'}
+              </span>
+              <Switch
+                checked={currentConfig.isGuarded}
+                onCheckedChange={(checked) => updateConfig({ isGuarded: checked })}
+                uncheckedColor={
+                  currentConfig.isGuarded ? undefined : UNGUARDED_YELLOW
+                }
+              />
+            </>
+          )}
         </div>
 
-        <ChevronDownIcon size={16} className={undefined} />
+        <div
+          onClick={(e) => {
+            e.stopPropagation()
+            setIsExpanded(!isExpanded)
+          }}
+          style={{
+            cursor: 'pointer',
+            padding: '4px',
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'transform 0.2s ease',
+            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
+          title={isExpanded ? 'Collapse' : 'Expand'}
+        >
+          <ChevronDownIcon size={16} className={undefined} />
+        </div>
       </div>
 
       {/* Expanded Configuration */}
@@ -2525,6 +2580,52 @@ export const MCPCard: React.FC<MCPCardProps> = ({
           className="animate-fade-in"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* OAuth Required - Not Supported by MCPGuard */}
+          {server.assessmentError?.type === 'oauth_required' && (
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(249, 115, 22, 0.1)',
+                border: '1px solid rgba(249, 115, 22, 0.4)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                }}
+              >
+                <InfoIcon size={16} className={undefined} />
+                <div style={{ flex: 1 }}>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: '12px',
+                      marginBottom: '4px',
+                      color: '#f97316',
+                    }}
+                  >
+                    Cannot Guard OAuth MCP
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--text-secondary)',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    This MCP requires OAuth authentication, which MCPGuard cannot support. OAuth tokens are managed by Cursor internally, and guarding would break the token association. 
+                    <strong style={{ display: 'block', marginTop: '8px' }}>
+                      To use this MCP, leave it unguarded and let Cursor handle it directly.
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Auth Failed Error - show prominently */}
           {server.assessmentError?.type === 'auth_failed' && (
             <div
@@ -3607,10 +3708,7 @@ export const TestButton: React.FC<TestButtonProps> = ({
   <Button
     variant="ghost"
     size="sm"
-    onClick={(e) => {
-      e?.stopPropagation()
-      onClick()
-    }}
+    onClick={onClick}
     disabled={disabled}
     style={{
       padding: '4px 8px',

@@ -456,6 +456,8 @@ export class WorkerManager {
         } = {}
 
         // Add custom headers if provided
+        // OAuth tokens are passed via config.headers as "Authorization: Bearer <token>"
+        // When OAuth flow completes, the token should be added to the MCP config headers
         if (config.headers) {
           transportOptions.requestInit = {
             headers: config.headers,
@@ -511,10 +513,21 @@ export class WorkerManager {
 
       return tools
     } catch (error: unknown) {
-      logger.warn(
-        { error, mcpName },
-        'Failed to fetch MCP schema for transparent proxy',
-      )
+      // Check for authentication errors (401/403) which may indicate OAuth is required
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const isAuthError = /401|403|Unauthorized|Forbidden/i.test(errorMessage)
+      
+      if (isAuthError) {
+        logger.warn(
+          { error, mcpName },
+          'Authentication failed for MCP - may require OAuth or valid Authorization header',
+        )
+      } else {
+        logger.warn(
+          { error, mcpName },
+          'Failed to fetch MCP schema for transparent proxy',
+        )
+      }
       // Return empty array on error - transparent proxy will skip this MCP
       return []
     } finally {
@@ -628,10 +641,21 @@ export class WorkerManager {
 
       return prompts
     } catch (error: unknown) {
-      logger.warn(
-        { error, mcpName },
-        'Failed to fetch MCP prompts for transparent proxy',
-      )
+      // Check for authentication errors (401/403) which may indicate OAuth is required
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const isAuthError = /401|403|Unauthorized|Forbidden/i.test(errorMessage)
+      
+      if (isAuthError) {
+        logger.warn(
+          { error, mcpName },
+          'Authentication failed for MCP prompts - may require OAuth or valid Authorization header',
+        )
+      } else {
+        logger.warn(
+          { error, mcpName },
+          'Failed to fetch MCP prompts for transparent proxy',
+        )
+      }
       // Return empty array on error - transparent proxy will skip this MCP
       return []
     } finally {

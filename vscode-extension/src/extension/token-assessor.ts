@@ -8,6 +8,7 @@
 import { type ChildProcess, spawn } from 'child_process'
 import type {
   MCPAssessmentError,
+  MCPOAuthMetadata,
   MCPSecurityConfig,
   MCPServerInfo,
   MCPTokenMetrics,
@@ -106,6 +107,76 @@ function truncateBody(body: string, maxLength = 500): string {
   return (
     body.substring(0, maxLength) + `... (truncated, total ${body.length} chars)`
   )
+}
+
+/**
+ * Discover OAuth metadata from a URL-based MCP server
+ * Checks the /.well-known/oauth-protected-resource endpoint (RFC 9728)
+ * @param baseUrl The MCP server URL
+ * @returns OAuth metadata if the server requires OAuth, null otherwise
+ */
+export async function discoverOAuthMetadata(
+  baseUrl: string,
+): Promise<MCPOAuthMetadata | null> {
+  try {
+    const url = new URL(baseUrl)
+    // Construct the well-known OAuth protected resource URL
+    const wellKnownUrl = `${url.origin}/.well-known/oauth-protected-resource`
+
+    console.log(`OAuth Discovery: Checking ${wellKnownUrl}...`)
+
+    const response = await fetch(wellKnownUrl, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(5000),
+    })
+
+    if (!response.ok) {
+      console.log(
+        `OAuth Discovery: ${wellKnownUrl} returned ${response.status} - server may not require OAuth`,
+      )
+      return null
+    }
+
+    const metadata = (await response.json()) as {
+      resource?: string
+      authorization_servers?: string[]
+      scopes_supported?: string[]
+      bearer_methods_supported?: string[]
+      resource_documentation?: string
+    }
+
+    // Validate that we have the minimum required fields
+    if (
+      !metadata.authorization_servers ||
+      metadata.authorization_servers.length === 0
+    ) {
+      console.log(
+        `OAuth Discovery: ${wellKnownUrl} response missing authorization_servers`,
+      )
+      return null
+    }
+
+    console.log(
+      `OAuth Discovery: Found OAuth metadata for ${baseUrl}:`,
+      JSON.stringify(metadata, null, 2),
+    )
+
+    return {
+      resource: metadata.resource,
+      authorization_servers: metadata.authorization_servers,
+      scopes_supported: metadata.scopes_supported,
+      bearer_methods_supported: metadata.bearer_methods_supported,
+      resource_documentation: metadata.resource_documentation,
+      discoveredAt: new Date().toISOString(),
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    console.log(`OAuth Discovery: Error checking ${baseUrl}: ${errorMsg}`)
+    return null
+  }
 }
 
 /**
@@ -213,6 +284,42 @@ async function assessURLBasedMCP(
       }
 
       if (statusCode === 401 || statusCode === 403) {
+        // Check for OAuth requirement from WWW-Authenticate header first
+        const wwwAuth = initResponse.headers.get('www-authenticate') || ''
+        const isOAuthBearer = wwwAuth.toLowerCase().includes('bearer')
+        
+        console.log(`Token Assessor: ${server.name} got ${statusCode}, checking OAuth...`)
+        console.log(`Token Assessor: WWW-Authenticate header: "${wwwAuth}"`)
+        console.log(`Token Assessor: isOAuthBearer: ${isOAuthBearer}`)
+        
+        // Also check well-known endpoint for OAuth metadata
+        const oauthMetadata = await discoverOAuthMetadata(server.url)
+        console.log(`Token Assessor: OAuth metadata from well-known: ${oauthMetadata ? 'found' : 'not found'}`)
+
+        if (oauthMetadata || isOAuthBearer) {
+          console.log(
+            `Token Assessor: ${server.name} requires OAuth authentication` +
+            (isOAuthBearer ? ' (detected via WWW-Authenticate header)' : ''),
+          )
+          return {
+            error: {
+              type: 'oauth_required',
+              message: `This MCP server requires OAuth authentication, which MCPGuard cannot support.`,
+              statusCode,
+              statusText,
+              errorAt: new Date().toISOString(),
+              oauthMetadata: oauthMetadata || {
+                // Create minimal metadata from WWW-Authenticate header
+                discoveredAt: new Date().toISOString(),
+                detectedVia: 'www-authenticate',
+                wwwAuthenticate: wwwAuth,
+              },
+              diagnostics,
+            },
+          }
+        }
+
+        console.log(`Token Assessor: ${server.name} - no OAuth detected, returning auth_failed`)
         return {
           error: {
             type: 'auth_failed',
@@ -327,6 +434,35 @@ async function assessURLBasedMCP(
       }
 
       if (statusCode === 401 || statusCode === 403) {
+        // Check for OAuth requirement from WWW-Authenticate header first
+        const wwwAuth = toolsResponse.headers.get('www-authenticate') || ''
+        const isOAuthBearer = wwwAuth.toLowerCase().includes('bearer')
+        
+        // Also check well-known endpoint for OAuth metadata
+        const oauthMetadata = await discoverOAuthMetadata(server.url)
+
+        if (oauthMetadata || isOAuthBearer) {
+          console.log(
+            `Token Assessor: ${server.name} requires OAuth authentication (on tools/list)` +
+            (isOAuthBearer ? ' (detected via WWW-Authenticate header)' : ''),
+          )
+          return {
+            error: {
+              type: 'oauth_required',
+              message: `This MCP server requires OAuth authentication, which MCPGuard cannot support.`,
+              statusCode,
+              statusText,
+              errorAt: new Date().toISOString(),
+              oauthMetadata: oauthMetadata || {
+                discoveredAt: new Date().toISOString(),
+                detectedVia: 'www-authenticate',
+                wwwAuthenticate: wwwAuth,
+              },
+              diagnostics,
+            },
+          }
+        }
+
         return {
           error: {
             type: 'auth_failed',
@@ -544,16 +680,21 @@ async function assessCommandBasedMCP(
 
     try {
       // Spawn the MCP process
+      // Note: server.command is guaranteed to be defined here due to the check at line 622
       const command =
         process.platform === 'win32' && server.command === 'npx'
           ? 'npx.cmd'
-          : server.command
+          : server.command!
 
       mcpProcess = spawn(command, server.args || [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, ...server.env },
         shell: process.platform === 'win32',
       })
+
+      // spawn() returns a valid ChildProcess or throws - it never returns null
+      // TypeScript needs help here because mcpProcess was initialized as null
+      const proc = mcpProcess
 
       // Send MCP initialize request
       const initRequest = {
@@ -570,10 +711,10 @@ async function assessCommandBasedMCP(
         },
       }
 
-      mcpProcess.stdin?.write(JSON.stringify(initRequest) + '\n')
+      proc.stdin?.write(JSON.stringify(initRequest) + '\n')
 
       // Handle stdout - look for responses
-      mcpProcess.stdout?.on('data', (data: Buffer) => {
+      proc.stdout?.on('data', (data: Buffer) => {
         stdoutBuffer += data.toString()
 
         // Try to parse complete JSON-RPC messages
@@ -643,14 +784,14 @@ async function assessCommandBasedMCP(
         stdoutBuffer = lines[lines.length - 1]
       })
 
-      mcpProcess.stderr?.on('data', (data: Buffer) => {
+      proc.stderr?.on('data', (data: Buffer) => {
         // Log stderr for debugging but don't fail
         console.log(
           `Token Assessor: ${server.name} stderr: ${data.toString().trim()}`,
         )
       })
 
-      mcpProcess.on('error', (error) => {
+      proc.on('error', (error) => {
         if (!resolved) {
           resolved = true
           clearTimeout(timeout)
@@ -661,7 +802,7 @@ async function assessCommandBasedMCP(
         }
       })
 
-      mcpProcess.on('exit', () => {
+      proc.on('exit', () => {
         if (!resolved) {
           resolved = true
           clearTimeout(timeout)
@@ -999,6 +1140,53 @@ export async function testMCPConnection(
         requestBody: initRequestBody,
         responseBody: truncateBody(initResponseBody),
         responseHeaders: initResponseHeaders,
+      }
+
+      // Check for OAuth if 401/403
+      if (initResponse.status === 401 || initResponse.status === 403) {
+        // Check for OAuth requirement from WWW-Authenticate header
+        const wwwAuth = initResponse.headers.get('www-authenticate') || ''
+        const isOAuthBearer = wwwAuth.toLowerCase().includes('bearer')
+        
+        console.log(`Connection Test: ${server.name} got ${initResponse.status}, checking OAuth...`)
+        console.log(`Connection Test: WWW-Authenticate header: "${wwwAuth}"`)
+        console.log(`Connection Test: isOAuthBearer: ${isOAuthBearer}`)
+        
+        // Also check well-known endpoint for OAuth metadata
+        const oauthMetadata = await discoverOAuthMetadata(server.url)
+        console.log(`Connection Test: OAuth metadata from well-known: ${oauthMetadata ? 'found' : 'not found'}`)
+        
+        if (oauthMetadata || isOAuthBearer) {
+          const detectionMethod = oauthMetadata 
+            ? `Authorization servers: ${oauthMetadata.authorization_servers?.join(', ')}`
+            : `Detected via WWW-Authenticate: Bearer header`
+          
+          steps.push({
+            name: 'OAuth Discovery',
+            success: true,
+            details: `Server requires OAuth authentication. ${detectionMethod}`,
+            durationMs: Date.now() - initStepStart,
+          })
+          return {
+            success: false,
+            mcpName: server.name,
+            steps,
+            error: {
+              type: 'oauth_required',
+              message: `This MCP server requires OAuth authentication, which MCPGuard cannot support.`,
+              statusCode: initResponse.status,
+              statusText: initResponse.statusText,
+              errorAt: new Date().toISOString(),
+              oauthMetadata: oauthMetadata || {
+                discoveredAt: new Date().toISOString(),
+                detectedVia: 'www-authenticate',
+                wwwAuthenticate: wwwAuth,
+              },
+              diagnostics,
+            },
+            durationMs: Date.now() - startTime,
+          }
+        }
       }
 
       return {
