@@ -1,0 +1,1 @@
+{"version":3,"file":"schema-converter.d.ts","sourceRoot":"","sources":["../../src/server/schema-converter.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAsB,OAAO,EAAE,MAAM,iBAAiB,CAAA;AAGlE,qBAAa,eAAe;IAI1B,mBAAmB,CAAC,KAAK,EAAE,OAAO,EAAE,GAAG,MAAM;IAe7C,OAAO,CAAC,wBAAwB;IAwBhC,OAAO,CAAC,iBAAiB;IAgBzB,OAAO,CAAC,sBAAsB;IAoC9B,OAAO,CAAC,YAAY;CAMrB"}

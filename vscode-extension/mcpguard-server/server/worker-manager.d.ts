@@ -1,0 +1,47 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import type { ExecutionResult, MCPConfig, MCPInstance, MCPTool, MCPPrompt } from '../types/mcp.js';
+export declare class WorkerManager {
+    private instances;
+    private mcpProcesses;
+    private mcpClients;
+    private wranglerProcesses;
+    private schemaConverter;
+    private wranglerAvailable;
+    private schemaCache;
+    private rpcServer;
+    private rpcPort;
+    private rpcServerReady;
+    private cachedWorkerEntryPoint;
+    private projectRoot;
+    constructor();
+    private findProjectRoot;
+    private startRPCServer;
+    private getRPCUrl;
+    hashConfig(mcpName: string, config: MCPConfig): string;
+    private getCacheKey;
+    private calculateToolSchemaSize;
+    private estimateTokens;
+    private calculateSchemaMetrics;
+    private getSecurityMetrics;
+    loadMCPSchemaOnly(mcpName: string, config: MCPConfig): Promise<MCPTool[]>;
+    loadMCPPromptsOnly(mcpName: string, config: MCPConfig): Promise<MCPPrompt[]>;
+    loadMCP(mcpName: string, config: MCPConfig): Promise<MCPInstance>;
+    executeCode(mcpId: string, code: string, timeoutMs?: number): Promise<ExecutionResult>;
+    unloadMCP(mcpId: string): Promise<void>;
+    listInstances(): MCPInstance[];
+    getInstance(mcpId: string): MCPInstance | undefined;
+    getMCPByName(mcpName: string): MCPInstance | undefined;
+    getMCPClient(mcpId: string): Client | undefined;
+    clearSchemaCache(mcpName: string): number;
+    private startMCPProcess;
+    private fetchMCPSchema;
+    private generateWorkerCode;
+    private executeInIsolate;
+    private getWorkerEntryPoint;
+    private executeWithWrangler;
+    private killProcessTree;
+    private killWranglerProcess;
+    private killMCPProcess;
+    shutdown(): Promise<void>;
+}
+//# sourceMappingURL=worker-manager.d.ts.map

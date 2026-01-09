@@ -241,3 +241,41 @@ The isolation boundary ensures that even if the AI generates malicious code:
 3. Communication is limited to approved MCP bindings
 4. Credentials remain hidden from the executing code
 
+## Limitations
+
+### OAuth MCPs Cannot Be Guarded
+
+<Callout type="warning" title="Important Limitation">
+  MCP servers that require OAuth authentication cannot be guarded by MCP Guard.
+</Callout>
+
+**Why?** OAuth authentication creates a trust relationship between the IDE and the MCP provider:
+
+```
+┌─────────────────┐     OAuth Flow      ┌─────────────────┐
+│  Cursor/Claude  │◄──────────────────►│  OAuth Provider  │
+│      IDE        │    (tokens bound    │  (Atlassian,    │
+│                 │     to IDE)         │   Google, etc)  │
+└────────┬────────┘                     └─────────────────┘
+         │
+         │ Tokens stored in IDE
+         ▼
+┌─────────────────┐
+│    MCP Server   │
+│  (uses IDE's    │
+│   OAuth token)  │
+└─────────────────┘
+```
+
+When MCP Guard intercepts communication:
+- It cannot access the IDE's OAuth tokens
+- The MCP server rejects requests without valid tokens
+- Re-authentication through MCP Guard would require client registration with every OAuth provider
+
+**Solution**: Use OAuth MCPs directly through your IDE without guarding. MCP Guard detects OAuth requirements and displays a "Cannot Guard" indicator.
+
+**MCPs that work with MCP Guard**:
+- API key authenticated MCPs (GitHub with PAT, etc.)
+- Command-based local MCPs (filesystem, git, etc.)
+- URL-based MCPs with header authentication
+- Any MCP that doesn't require OAuth

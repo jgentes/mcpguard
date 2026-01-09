@@ -40,13 +40,16 @@ import { checkAllMCPVersions } from './version-checker'
 
 /**
  * Hydrate a stored config with computed isGuarded from IDE config
+ * @param storedConfig The stored config to hydrate
+ * @param source Optional source IDE - if provided, checks that IDE's config for disabled status
  */
 function hydrateConfig(
   storedConfig: MCPSecurityConfigStored,
+  source?: 'claude' | 'copilot' | 'cursor',
 ): MCPSecurityConfig {
   return {
     ...storedConfig,
-    isGuarded: isMCPDisabled(storedConfig.mcpName),
+    isGuarded: isMCPDisabled(storedConfig.mcpName, source),
   }
 }
 
@@ -59,9 +62,33 @@ function dehydrateConfig(config: MCPSecurityConfig): MCPSecurityConfigStored {
 }
 
 /**
- * Load settings from disk and hydrate configs with isGuarded from IDE config
+ * Build a map of MCP names to their source IDE for quick lookup
  */
-function loadSettingsWithHydration(settingsPath: string): MCPGuardSettings {
+function buildSourceMap(
+  mcps: Array<{ name: string; source: string }>,
+): Map<string, 'claude' | 'copilot' | 'cursor' | undefined> {
+  const map = new Map<string, 'claude' | 'copilot' | 'cursor' | undefined>()
+  for (const mcp of mcps) {
+    if (
+      mcp.source === 'claude' ||
+      mcp.source === 'copilot' ||
+      mcp.source === 'cursor'
+    ) {
+      map.set(mcp.name, mcp.source)
+    }
+  }
+  return map
+}
+
+/**
+ * Load settings from disk and hydrate configs with isGuarded from IDE config
+ * @param settingsPath Path to the settings file
+ * @param mcps Optional list of loaded MCPs - if provided, uses their source for accurate hydration
+ */
+function loadSettingsWithHydration(
+  settingsPath: string,
+  mcps?: Array<{ name: string; source: string }>,
+): MCPGuardSettings {
   if (!fs.existsSync(settingsPath)) {
     return {
       ...DEFAULT_SETTINGS,
@@ -73,8 +100,14 @@ function loadSettingsWithHydration(settingsPath: string): MCPGuardSettings {
     const content = fs.readFileSync(settingsPath, 'utf-8')
     const storedSettings = JSON.parse(content) as MCPGuardSettingsStored
 
-    // Hydrate configs with computed isGuarded from IDE config
-    const hydratedConfigs = storedSettings.mcpConfigs.map(hydrateConfig)
+    // Build source map for accurate hydration
+    const sourceMap = mcps ? buildSourceMap(mcps) : null
+
+    // Hydrate configs with computed isGuarded from the correct IDE config
+    const hydratedConfigs = storedSettings.mcpConfigs.map((config) => {
+      const source = sourceMap?.get(config.mcpName)
+      return hydrateConfig(config, source)
+    })
 
     return {
       ...storedSettings,
@@ -212,7 +245,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
       this._log('Background version check starting...')
       const mcps = loadAllMCPServers()
       const settingsPath = getSettingsPath()
-      const settings = loadSettingsWithHydration(settingsPath)
+      const settings = loadSettingsWithHydration(settingsPath, mcps)
 
       const cache = settings.tokenMetricsCache || {}
       let cacheUpdated = false
@@ -370,7 +403,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
         break
 
       case 'retryAssessment':
-        await this._retryAssessment(message.mcpName)
+        await this._retryAssessment(message.mcpName, message.source)
         break
 
       case 'openLogs':
@@ -425,10 +458,14 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
   /**
    * Retry assessment for a specific MCP (clears cached error first)
    */
-  private async _retryAssessment(mcpName: string): Promise<void> {
+  private async _retryAssessment(
+    mcpName: string,
+    source?: 'claude' | 'copilot' | 'cursor',
+  ): Promise<void> {
     // Clear the cached error first
+    const mcps = loadAllMCPServers()
     const settingsPath = getSettingsPath()
-    const settings = loadSettingsWithHydration(settingsPath)
+    const settings = loadSettingsWithHydration(settingsPath, mcps)
 
     // Clear cached error
     if (settings.assessmentErrorsCache?.[mcpName]) {
@@ -626,7 +663,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
     try {
       const mcps = loadAllMCPServers()
       const settingsPath = getSettingsPath()
-      const settings = loadSettingsWithHydration(settingsPath)
+      const settings = loadSettingsWithHydration(settingsPath, mcps)
 
       // Filter to specific MCP if requested
       const mcpsToCheck = mcpName
@@ -672,8 +709,9 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
    */
   private async _sendSettings(): Promise<void> {
     try {
+      const mcps = loadAllMCPServers()
       const settingsPath = getSettingsPath()
-      const settings = loadSettingsWithHydration(settingsPath)
+      const settings = loadSettingsWithHydration(settingsPath, mcps)
 
       this._postMessage({ type: 'settings', data: settings })
     } catch (error) {
@@ -695,7 +733,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
 
       // Load token metrics from cache (with hydrated isGuarded from IDE config)
       const settingsPath = getSettingsPath()
-      const settings = loadSettingsWithHydration(settingsPath)
+      const settings = loadSettingsWithHydration(settingsPath, mcps)
 
       const tokenCache = settings.tokenMetricsCache || {}
       const errorCache = settings.assessmentErrorsCache || {}
@@ -739,10 +777,12 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
    */
   private async _saveSettings(settings: MCPGuardSettings): Promise<void> {
     try {
+      const mcps = loadAllMCPServers()
       const settingsPath = getSettingsPath()
+      const sourceMap = buildSourceMap(mcps)
 
       // Check if global enabled state changed
-      const previousSettings = loadSettingsWithHydration(settingsPath)
+      const previousSettings = loadSettingsWithHydration(settingsPath, mcps)
 
       const globalEnabledChanged = previousSettings.enabled !== settings.enabled
 
@@ -752,8 +792,9 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
       // If global enabled state changed, update IDE config for all guarded MCPs
       if (globalEnabledChanged) {
         // Get guarded MCPs by checking IDE config (isGuarded is derived from there)
+        // Use source-aware check for each MCP
         const guardedMcps = settings.mcpConfigs.filter((c) =>
-          isMCPDisabled(c.mcpName),
+          isMCPDisabled(c.mcpName, sourceMap.get(c.mcpName)),
         )
 
         if (settings.enabled) {
@@ -770,10 +811,12 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
         } else {
           // MCP Guard is now disabled - restore all guarded MCPs to active in IDE config
           for (const config of guardedMcps) {
-            const result = enableMCPInIDE(config.mcpName)
+            // Use source-aware enable for each MCP
+            const source = sourceMap.get(config.mcpName)
+            const result = enableMCPInIDE(config.mcpName, source)
             if (result.success) {
               console.log(
-                `MCP Guard: ${config.mcpName} restored to active in IDE config`,
+                `MCP Guard: ${config.mcpName} restored to active in IDE config${source ? ` (${source})` : ''}`,
               )
             }
           }
@@ -794,7 +837,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
         await this._sendMCPServers()
       } else {
         // For non-guard changes (e.g., context window size), still send settings back
-        const updatedSettings = loadSettingsWithHydration(settingsPath)
+        const updatedSettings = loadSettingsWithHydration(settingsPath, mcps)
         this._postMessage({ type: 'settings', data: updatedSettings })
       }
     } catch (error) {
@@ -817,8 +860,9 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
     source?: 'claude' | 'copilot' | 'cursor',
   ): Promise<void> {
     try {
+      const mcps = loadAllMCPServers()
       const settingsPath = getSettingsPath()
-      let settings = loadSettingsWithHydration(settingsPath)
+      let settings = loadSettingsWithHydration(settingsPath, mcps)
 
       // Check if guard status changed (compare against the correct IDE config)
       const wasGuarded = isMCPDisabled(config.mcpName, source)
@@ -862,8 +906,9 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
         }
       }
 
-      // Reload settings to get fresh isGuarded state from IDE config
-      settings = loadSettingsWithHydration(settingsPath)
+      // Reload MCPs and settings to get fresh isGuarded state from IDE config
+      const updatedMcps = loadAllMCPServers()
+      settings = loadSettingsWithHydration(settingsPath, updatedMcps)
 
       // Update or add the MCP config in settings (security settings only, not isGuarded)
       const existingIndex = settings.mcpConfigs.findIndex(
@@ -887,7 +932,8 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
 
       // Always send updated settings back to ensure frontend is in sync
       // This is critical for toggles that need to persist across component unmount/remount
-      const updatedSettings = loadSettingsWithHydration(settingsPath)
+      const finalMcps = loadAllMCPServers()
+      const updatedSettings = loadSettingsWithHydration(settingsPath, finalMcps)
       this._postMessage({ type: 'settings', data: updatedSettings })
 
       // Show appropriate success message
@@ -946,7 +992,7 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
 
       // Save to settings cache
       const settingsPath = getSettingsPath()
-      const settings = loadSettingsWithHydration(settingsPath)
+      const settings = loadSettingsWithHydration(settingsPath, mcps)
 
       if (result.metrics) {
         if (!settings.tokenMetricsCache) {
@@ -995,8 +1041,9 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
    */
   private async _sendTokenSavings(): Promise<void> {
     try {
+      const mcps = loadAllMCPServers()
       const settingsPath = getSettingsPath()
-      const settings = loadSettingsWithHydration(settingsPath)
+      const settings = loadSettingsWithHydration(settingsPath, mcps)
 
       this._log(`Loading settings from ${settingsPath}`)
       this._log(`Loaded settings with ${settings.mcpConfigs.length} configs`)
@@ -1004,7 +1051,6 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
         `Configs: ${JSON.stringify(settings.mcpConfigs.map((c) => ({ name: c.mcpName, guarded: c.isGuarded })))}`,
       )
 
-      const mcps = loadAllMCPServers()
       this._log(
         `Found ${mcps.length} MCPs: ${mcps.map((m) => m.name).join(', ')}`,
       )
@@ -1029,10 +1075,10 @@ export class MCPGuardWebviewProvider implements vscode.WebviewViewProvider {
    * Runs in the background without blocking
    */
   private async _autoAssessTokens(): Promise<void> {
-    const settingsPath = getSettingsPath()
-    const settings = loadSettingsWithHydration(settingsPath)
-
     const mcps = loadAllMCPServers()
+    const settingsPath = getSettingsPath()
+    const settings = loadSettingsWithHydration(settingsPath, mcps)
+
     const tokenCache = settings.tokenMetricsCache || {}
     const errorCache = settings.assessmentErrorsCache || {}
 

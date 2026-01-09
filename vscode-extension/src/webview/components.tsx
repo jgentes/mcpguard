@@ -1694,7 +1694,8 @@ const NetworkConfigSection: React.FC<NetworkConfigSectionProps> = ({
                   marginTop: '4px',
                 }}
               >
-                Only these hosts will be accessible. Supports wildcards (e.g., *.github.com).
+                Only these hosts will be accessible. Supports wildcards (e.g.,
+                *.github.com).
               </div>
               {localNetwork.allowlist.length === 0 && (
                 <div
@@ -1710,9 +1711,15 @@ const NetworkConfigSection: React.FC<NetworkConfigSectionProps> = ({
                   }}
                 >
                   <span style={{ fontSize: '14px' }}>⚠️</span>
-                  <div style={{ fontSize: '11px', color: 'var(--text-warning, #eab308)' }}>
-                    <strong>Unrestricted Mode:</strong> With an empty allowlist, this MCP can access ANY domain.
-                    Add specific domains to restrict network access.
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--text-warning, #eab308)',
+                    }}
+                  >
+                    <strong>Unrestricted Mode:</strong> With an empty allowlist,
+                    this MCP can access ANY domain. Add specific domains to
+                    restrict network access.
                   </div>
                 </div>
               )}
@@ -2112,7 +2119,10 @@ const VersionConfigSection: React.FC<VersionConfigSectionProps> = ({
 interface MCPCardProps {
   server: MCPServerInfo
   config?: MCPSecurityConfig
-  onConfigChange: (config: MCPSecurityConfig, source?: 'claude' | 'copilot' | 'cursor') => void
+  onConfigChange: (
+    config: MCPSecurityConfig,
+    source?: 'claude' | 'copilot' | 'cursor',
+  ) => void
   currentIDE?: string // The IDE we're currently running in
   globalEnabled?: boolean // Whether MCP Guard is globally enabled
   onTestConnection?: (mcpName: string) => void // Callback to test connection
@@ -2150,12 +2160,18 @@ export const MCPCard: React.FC<MCPCardProps> = ({
   const updateConfig = useCallback(
     (updates: Partial<MCPSecurityConfig>) => {
       // Pass server.source to ensure modifications go to the correct IDE config
-      const source = server.source !== 'unknown' ? server.source as 'claude' | 'copilot' | 'cursor' : undefined
-      onConfigChange({
-        ...currentConfig,
-        ...updates,
-        lastModified: new Date().toISOString(),
-      }, source)
+      const source =
+        server.source !== 'unknown'
+          ? (server.source as 'claude' | 'copilot' | 'cursor')
+          : undefined
+      onConfigChange(
+        {
+          ...currentConfig,
+          ...updates,
+          lastModified: new Date().toISOString(),
+        },
+        source,
+      )
     },
     [currentConfig, onConfigChange, server.source],
   )
@@ -2249,7 +2265,9 @@ export const MCPCard: React.FC<MCPCardProps> = ({
             {/* Source IDE indicator - only shown when MCP is from a different IDE */}
             {server.source !== currentIDE && server.source !== 'unknown' && (
               <>
-                <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>|</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                  |
+                </span>
                 <span
                   style={{
                     fontSize: '11px',
@@ -2258,7 +2276,11 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                   }}
                   title={`Loaded from ${server.source === 'claude' ? 'Claude Code' : server.source === 'copilot' ? 'GitHub Copilot' : 'Cursor'} config`}
                 >
-                  {server.source === 'claude' ? 'Claude' : server.source === 'copilot' ? 'Copilot' : 'Cursor'}
+                  {server.source === 'claude'
+                    ? 'Claude'
+                    : server.source === 'copilot'
+                      ? 'Copilot'
+                      : 'Cursor'}
                 </span>
               </>
             )}
@@ -2539,7 +2561,9 @@ export const MCPCard: React.FC<MCPCardProps> = ({
               </span>
               <Switch
                 checked={currentConfig.isGuarded}
-                onCheckedChange={(checked) => updateConfig({ isGuarded: checked })}
+                onCheckedChange={(checked) =>
+                  updateConfig({ isGuarded: checked })
+                }
                 uncheckedColor={
                   currentConfig.isGuarded ? undefined : UNGUARDED_YELLOW
                 }
@@ -2617,9 +2641,12 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                       lineHeight: 1.5,
                     }}
                   >
-                    This MCP requires OAuth authentication, which MCPGuard cannot support. OAuth tokens are managed by Cursor internally, and guarding would break the token association. 
+                    This MCP requires OAuth authentication, which MCPGuard
+                    cannot support. OAuth tokens are managed by Cursor
+                    internally, and guarding would break the token association.
                     <strong style={{ display: 'block', marginTop: '8px' }}>
-                      To use this MCP, leave it unguarded and let Cursor handle it directly.
+                      To use this MCP, leave it unguarded and let Cursor handle
+                      it directly.
                     </strong>
                   </div>
                 </div>
@@ -2768,6 +2795,10 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                         postMessage({
                           type: 'retryAssessment',
                           mcpName: server.name,
+                          source:
+                            server.source !== 'unknown'
+                              ? (server.source as 'claude' | 'copilot' | 'cursor')
+                              : undefined,
                         })
                       }
                       style={{
@@ -2930,6 +2961,10 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                           postMessage({
                             type: 'retryAssessment',
                             mcpName: server.name,
+                            source:
+                              server.source !== 'unknown'
+                                ? (server.source as 'claude' | 'copilot' | 'cursor')
+                                : undefined,
                           })
                         }
                         style={{
@@ -3099,6 +3134,10 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                         postMessage({
                           type: 'retryAssessment',
                           mcpName: server.name,
+                          source:
+                            server.source !== 'unknown'
+                              ? (server.source as 'claude' | 'copilot' | 'cursor')
+                              : undefined,
                         })
                       }
                       style={{
@@ -3473,6 +3512,10 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                   postMessage({
                     type: 'deleteMCP',
                     mcpName: server.name,
+                    source:
+                      server.source !== 'unknown'
+                        ? (server.source as 'claude' | 'copilot' | 'cursor')
+                        : undefined,
                   })
                 }
                 style={{
@@ -3632,11 +3675,7 @@ export const Header: React.FC<HeaderProps> = ({
         label={globalEnabled ? 'MCP Guard Enabled' : 'MCP Guard Disabled'}
       />
 
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onOpenMCPConfig}
-      >
+      <Button variant="ghost" size="sm" onClick={onOpenMCPConfig}>
         <SettingsIcon size={14} />
         MCP Config
       </Button>
