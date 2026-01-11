@@ -34,6 +34,7 @@ import {
 } from '../utils/errors.js'
 import logger from '../utils/logger.js'
 import {
+  clearMCPSchemaCache,
   getCachedSchema,
   getIsolationConfigForMCP,
   saveCachedSchema,
@@ -783,7 +784,15 @@ export class WorkerManager {
 
       // Check persistent cache if not in memory or if memory cache is empty for URL-based MCP
       if (shouldCheckPersistentCache) {
-        const persistentCached = getCachedSchema(mcpName, configHash)
+        let persistentCached = getCachedSchema(mcpName, configHash)
+        if (persistentCached && persistentCached.toolCount === 0) {
+          clearMCPSchemaCache(mcpName)
+          logger.info(
+            { mcpId, mcpName, configHash },
+            'Cleared stale zero-tool persistent cache entry',
+          )
+          persistentCached = null
+        }
         if (persistentCached && persistentCached.toolCount > 0) {
           // Load into in-memory cache (override empty cache)
           this.schemaCache.set(cacheKey, {
@@ -805,8 +814,11 @@ export class WorkerManager {
 
       // Re-check cache after loading from persistent
       const cachedAfterLoad = this.schemaCache.get(cacheKey)
+      // For URL-based MCPs, a 0-tool cache is invalid and should trigger fresh fetch
       const hasCachedSchemaAfterLoad =
-        cachedAfterLoad && cachedAfterLoad.configHash === configHash
+        cachedAfterLoad &&
+        cachedAfterLoad.configHash === configHash &&
+        (isCommandBasedConfig(config) || cachedAfterLoad.tools.length > 0)
 
       // Step 2: If we have cached schema, we still need to establish connection for execution
       if (hasCachedSchemaAfterLoad) {
