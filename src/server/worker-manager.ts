@@ -508,7 +508,7 @@ export class WorkerManager {
 
       // Fetch tools
       const toolsResponse = await client.listTools()
-      
+
       logger.info(
         { mcpName, toolCount: toolsResponse.tools.length },
         `loadMCPSchemaOnly: received ${toolsResponse.tools.length} tools`,
@@ -1395,7 +1395,7 @@ export class WorkerManager {
       const listToolsStartTime = Date.now()
       const toolsResponse = await client.listTools()
       const listToolsTime = Date.now() - listToolsStartTime
-      
+
       // Log tool count at info level to help diagnose issues
       logger.info(
         {
@@ -1403,7 +1403,7 @@ export class WorkerManager {
           mcpName,
           toolCount: toolsResponse.tools.length,
           listToolsTimeMs: listToolsTime,
-          toolNames: toolsResponse.tools.slice(0, 5).map(t => t.name), // First 5 tools for debugging
+          toolNames: toolsResponse.tools.slice(0, 5).map((t) => t.name), // First 5 tools for debugging
         },
         `Fetched ${toolsResponse.tools.length} tools from MCP server`,
       )
