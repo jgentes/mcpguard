@@ -2318,6 +2318,23 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                   Cannot Guard
                 </span>
               )}
+            {/* Assessment error - SDK mismatch (MCPGuard server can't connect) */}
+            {!server.tokenMetrics &&
+              server.assessmentError?.type === 'sdk_mismatch' && (
+                <span
+                  style={{
+                    fontSize: '10px',
+                    padding: '2px 6px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid rgba(249, 115, 22, 0.5)',
+                    color: '#f97316',
+                    fontWeight: 500,
+                  }}
+                  title={server.assessmentError.message}
+                >
+                  Cannot Guard
+                </span>
+              )}
             {/* Assessment error - auth failed (no OAuth discovered) */}
             {!server.tokenMetrics &&
               server.assessmentError?.type === 'auth_failed' && (
@@ -2339,7 +2356,8 @@ export const MCPCard: React.FC<MCPCardProps> = ({
             {!server.tokenMetrics &&
               server.assessmentError &&
               server.assessmentError.type !== 'auth_failed' &&
-              server.assessmentError.type !== 'oauth_required' && (
+              server.assessmentError.type !== 'oauth_required' &&
+              server.assessmentError.type !== 'sdk_mismatch' && (
                 <span
                   style={{
                     fontSize: '10px',
@@ -2527,8 +2545,9 @@ export const MCPCard: React.FC<MCPCardProps> = ({
           onClick={(e) => e.stopPropagation()}
           style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
         >
-          {/* Show special state for OAuth MCPs - they can't be guarded */}
-          {server.assessmentError?.type === 'oauth_required' ? (
+          {/* Show special state for OAuth MCPs and SDK mismatch - they can't be guarded */}
+          {server.assessmentError?.type === 'oauth_required' ||
+          server.assessmentError?.type === 'sdk_mismatch' ? (
             <span
               style={{
                 fontSize: '11px',
@@ -2538,9 +2557,15 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                 borderRadius: 'var(--radius-sm)',
                 background: 'rgba(249, 115, 22, 0.15)',
               }}
-              title="OAuth MCPs are not supported by MCPGuard"
+              title={
+                server.assessmentError?.type === 'sdk_mismatch'
+                  ? 'MCPGuard server cannot connect to this MCP'
+                  : 'OAuth MCPs are not supported by MCPGuard'
+              }
             >
-              OAuth Not Supported
+              {server.assessmentError?.type === 'sdk_mismatch'
+                ? 'SDK Mismatch'
+                : 'OAuth Not Supported'}
             </span>
           ) : (
             <>
@@ -2644,6 +2669,85 @@ export const MCPCard: React.FC<MCPCardProps> = ({
                     This MCP requires OAuth authentication, which MCPGuard
                     cannot support. OAuth tokens are managed by Cursor
                     internally, and guarding would break the token association.
+                    <strong style={{ display: 'block', marginTop: '8px' }}>
+                      To use this MCP, leave it unguarded and let Cursor handle
+                      it directly.
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SDK Mismatch - MCPGuard server cannot connect */}
+          {server.assessmentError?.type === 'sdk_mismatch' && (
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(249, 115, 22, 0.1)',
+                border: '1px solid rgba(249, 115, 22, 0.4)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                }}
+              >
+                <InfoIcon size={16} className={undefined} />
+                <div style={{ flex: 1 }}>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: '12px',
+                      marginBottom: '4px',
+                      color: '#f97316',
+                    }}
+                  >
+                    Cannot Guard - SDK Mismatch
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--text-secondary)',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    MCPGuard's SDK transport cannot connect to this MCP, even
+                    though a direct HTTP connection works. This usually indicates
+                    an authentication or protocol compatibility issue.
+                    {server.assessmentError.sdkValidation && (
+                      <div
+                        style={{
+                          marginTop: '8px',
+                          padding: '8px',
+                          background: 'rgba(0, 0, 0, 0.2)',
+                          borderRadius: 'var(--radius-sm)',
+                          fontFamily: 'monospace',
+                          fontSize: '10px',
+                        }}
+                      >
+                        <div>
+                          Direct fetch:{' '}
+                          {server.assessmentError.sdkValidation.directFetchTools}{' '}
+                          tools
+                        </div>
+                        <div>
+                          SDK transport:{' '}
+                          {server.assessmentError.sdkValidation.sdkTransportTools ===
+                          -1
+                            ? 'FAILED'
+                            : `${server.assessmentError.sdkValidation.sdkTransportTools} tools`}
+                        </div>
+                        {server.assessmentError.sdkValidation.sdkError && (
+                          <div style={{ marginTop: '4px', color: '#ef4444' }}>
+                            Error: {server.assessmentError.sdkValidation.sdkError}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <strong style={{ display: 'block', marginTop: '8px' }}>
                       To use this MCP, leave it unguarded and let Cursor handle
                       it directly.

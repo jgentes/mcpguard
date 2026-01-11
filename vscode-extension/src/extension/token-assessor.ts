@@ -6,6 +6,8 @@
  */
 
 import { type ChildProcess, spawn } from 'child_process'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type {
   MCPAssessmentError,
   MCPOAuthMetadata,
@@ -20,6 +22,70 @@ import {
   extractPackageName,
   isNpxCommand,
 } from './version-checker'
+
+/**
+ * Validate URL-based MCP using MCP SDK's StreamableHTTPClientTransport
+ * This is the same method used by MCPGuard server at runtime
+ * Returns the number of tools or -1 if validation fails
+ */
+async function validateWithSDKTransport(
+  url: string,
+  headers?: Record<string, string>,
+): Promise<{ toolCount: number; error?: string }> {
+  let client: Client | null = null
+  let transport: StreamableHTTPClientTransport | null = null
+
+  try {
+    const parsedUrl = new URL(url)
+    const transportOptions: { requestInit?: RequestInit } = {}
+
+    if (headers) {
+      transportOptions.requestInit = {
+        headers: headers,
+      }
+    }
+
+    transport = new StreamableHTTPClientTransport(parsedUrl, transportOptions)
+
+    client = new Client(
+      { name: 'mcpguard-validator', version: '0.1.0' },
+      { capabilities: {} },
+    )
+
+    // Connect with timeout
+    await client.connect(transport, { timeout: 10000 })
+
+    // Fetch tools
+    const toolsResponse = await client.listTools()
+    const toolCount = toolsResponse.tools.length
+
+    console.log(
+      `SDK Validation: ${url} - received ${toolCount} tools via SDK transport`,
+    )
+
+    return { toolCount }
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.log(`SDK Validation: ${url} - failed: ${errorMessage}`)
+    return { toolCount: -1, error: errorMessage }
+  } finally {
+    // Clean up
+    if (client) {
+      try {
+        await client.close()
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+    if (transport) {
+      try {
+        await transport.close()
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+}
 
 /**
  * Tool schema format from MCP protocol
@@ -544,6 +610,61 @@ async function assessURLBasedMCP(
     const schemaChars = JSON.stringify(tools).length
     const estimatedTokens = estimateTokens(schemaChars)
 
+    // Validate with SDK transport (same as MCPGuard server uses at runtime)
+    // This ensures the UI shows accurate information about what MCPGuard can actually use
+    console.log(
+      `Token Assessor: ${server.name} - validating with SDK transport...`,
+    )
+    const sdkValidation = await validateWithSDKTransport(server.url!, server.headers)
+
+    // If SDK validation failed or returned 0 tools when direct fetch got tools,
+    // this indicates MCPGuard server won't be able to use this MCP
+    if (sdkValidation.toolCount === -1) {
+      console.log(
+        `Token Assessor: ${server.name} - SDK validation FAILED: ${sdkValidation.error}`,
+      )
+      return {
+        error: {
+          type: 'sdk_mismatch',
+          message: `MCPGuard cannot connect to this MCP. Direct fetch succeeded with ${tools.length} tools, but SDK transport failed. This means MCPGuard server won't be able to guard this MCP.`,
+          errorAt: new Date().toISOString(),
+          sdkValidation: {
+            directFetchTools: tools.length,
+            sdkTransportTools: -1,
+            sdkError: sdkValidation.error,
+          },
+          diagnostics: {
+            requestUrl: server.url,
+            requestMethod: 'POST',
+            requestHeaders: maskSensitiveHeaders(baseHeaders),
+          },
+        },
+      }
+    }
+
+    if (sdkValidation.toolCount === 0 && tools.length > 0) {
+      console.log(
+        `Token Assessor: ${server.name} - SDK validation MISMATCH: direct fetch got ${tools.length} tools but SDK got 0`,
+      )
+      return {
+        error: {
+          type: 'sdk_mismatch',
+          message: `MCPGuard cannot use this MCP. Direct fetch returned ${tools.length} tools, but SDK transport returned 0. This indicates an authentication or protocol issue.`,
+          errorAt: new Date().toISOString(),
+          sdkValidation: {
+            directFetchTools: tools.length,
+            sdkTransportTools: 0,
+            sdkError: 'SDK returned 0 tools while direct fetch succeeded',
+          },
+          diagnostics: {
+            requestUrl: server.url,
+            requestMethod: 'POST',
+            requestHeaders: maskSensitiveHeaders(baseHeaders),
+          },
+        },
+      }
+    }
+
     const metrics: MCPTokenMetrics = {
       toolCount: tools.length,
       schemaChars,
@@ -552,7 +673,7 @@ async function assessURLBasedMCP(
     }
 
     console.log(
-      `Token Assessor: ${server.name} - ${tools.length} tools, ~${estimatedTokens} tokens`,
+      `Token Assessor: ${server.name} - ${tools.length} tools, ~${estimatedTokens} tokens (SDK validated: ${sdkValidation.toolCount} tools)`,
     )
     return { metrics }
   } catch (error) {

@@ -87,12 +87,13 @@ export interface MCPOAuthMetadata {
  * Assessment error info for MCPs that failed assessment
  */
 export interface MCPAssessmentError {
-  /** Error type - 'oauth_required' indicates OAuth flow is needed */
+  /** Error type - 'oauth_required' indicates OAuth flow is needed, 'sdk_mismatch' indicates SDK transport failed */
   type:
     | 'auth_failed'
     | 'oauth_required'
     | 'connection_failed'
     | 'timeout'
+    | 'sdk_mismatch'
     | 'unknown'
   /** Human-readable message */
   message: string
@@ -104,6 +105,15 @@ export interface MCPAssessmentError {
   errorAt: string
   /** OAuth metadata if OAuth is required */
   oauthMetadata?: MCPOAuthMetadata
+  /** SDK validation details (for sdk_mismatch errors) */
+  sdkValidation?: {
+    /** Number of tools from direct fetch */
+    directFetchTools: number
+    /** Number of tools from SDK transport (-1 if failed) */
+    sdkTransportTools: number
+    /** Error message from SDK transport if it failed */
+    sdkError?: string
+  }
   /** Diagnostic details for troubleshooting */
   diagnostics?: {
     /** URL that was requested */

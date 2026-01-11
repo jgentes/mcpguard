@@ -440,9 +440,35 @@ export class WorkerManager {
     const cacheKey = this.getCacheKey(mcpName, config)
     const configHash = this.hashConfig(mcpName, config)
 
-    // Check cache first
+    // Check in-memory cache first
     const cached = this.schemaCache.get(cacheKey)
-    if (cached && cached.configHash === configHash) {
+    const hasCachedSchema = cached && cached.configHash === configHash
+
+    // For URL-based MCPs with 0 tools, also check persistent cache
+    // as another process might have successfully cached tools
+    if (hasCachedSchema && cached.tools.length === 0 && !isCommandBasedConfig(config)) {
+      const persistentCached = getCachedSchema(mcpName, configHash)
+      if (persistentCached && persistentCached.toolCount > 0) {
+        // Update in-memory cache with persistent cache
+        this.schemaCache.set(cacheKey, {
+          tools: persistentCached.tools as MCPTool[],
+          typescriptApi:
+            persistentCached.typescriptApi ||
+            this.schemaConverter.convertToTypeScript(
+              persistentCached.tools as MCPTool[],
+            ),
+          configHash: persistentCached.configHash,
+          cachedAt: new Date(persistentCached.cachedAt),
+        })
+        logger.info(
+          { mcpName, toolCount: persistentCached.toolCount },
+          'Updated empty in-memory cache from persistent cache (transparent proxy)',
+        )
+        return persistentCached.tools as MCPTool[]
+      }
+    }
+
+    if (hasCachedSchema) {
       logger.debug(
         { mcpName, cacheKey, toolCount: cached.tools.length },
         'Using cached MCP schema for transparent proxy',
@@ -528,19 +554,35 @@ export class WorkerManager {
         },
       }))
 
-      // Cache the schema
-      const typescriptApi = this.schemaConverter.convertToTypeScript(tools)
-      this.schemaCache.set(cacheKey, {
-        tools,
-        typescriptApi,
-        configHash,
-        cachedAt: new Date(),
-      })
+      // Only cache if we got at least one tool (for URL-based MCPs)
+      // Empty results may indicate auth failures that shouldn't be cached
+      const shouldCache = tools.length > 0 || isCommandBasedConfig(config)
 
-      logger.info(
-        { mcpName, cacheKey, toolCount: tools.length },
-        'Fetched and cached MCP schema for transparent proxy',
-      )
+      if (shouldCache) {
+        // Cache the schema
+        const typescriptApi = this.schemaConverter.convertToTypeScript(tools)
+        this.schemaCache.set(cacheKey, {
+          tools,
+          typescriptApi,
+          configHash,
+          cachedAt: new Date(),
+        })
+
+        logger.info(
+          { mcpName, cacheKey, toolCount: tools.length },
+          'Fetched and cached MCP schema for transparent proxy',
+        )
+      } else {
+        // Log warning for URL-based MCPs that returned 0 tools
+        logger.warn(
+          {
+            mcpName,
+            url: !isCommandBasedConfig(config) ? config.url : undefined,
+            toolCount: tools.length,
+          },
+          'URL-based MCP returned 0 tools - not caching (may indicate auth issue)',
+        )
+      }
 
       return tools
     } catch (error: unknown) {
@@ -733,11 +775,17 @@ export class WorkerManager {
       const configHash = this.hashConfig(mcpName, config)
       const hasCachedSchema = cached && cached.configHash === configHash
 
-      // Check persistent cache if not in memory
-      if (!hasCachedSchema) {
+      // For URL-based MCPs with 0 tools in memory cache, check persistent cache
+      // as another process might have successfully cached tools
+      const shouldCheckPersistentCache =
+        !hasCachedSchema ||
+        (!isCommandBasedConfig(config) && cached && cached.tools.length === 0)
+
+      // Check persistent cache if not in memory or if memory cache is empty for URL-based MCP
+      if (shouldCheckPersistentCache) {
         const persistentCached = getCachedSchema(mcpName, configHash)
-        if (persistentCached) {
-          // Load into in-memory cache
+        if (persistentCached && persistentCached.toolCount > 0) {
+          // Load into in-memory cache (override empty cache)
           this.schemaCache.set(cacheKey, {
             tools: persistentCached.tools as MCPTool[],
             typescriptApi:
@@ -760,11 +808,21 @@ export class WorkerManager {
       const hasCachedSchemaAfterLoad =
         cachedAfterLoad && cachedAfterLoad.configHash === configHash
 
-      // Step 2: If we have cached schema and it's a command-based MCP, we still need a process for execution
-      // URL-based MCPs don't spawn processes - they use HTTP connections
-      if (hasCachedSchemaAfterLoad && isCommandBasedConfig(config)) {
-        const mcpProcess = await this.startMCPProcess(config, true)
-        this.mcpProcesses.set(mcpId, mcpProcess)
+      // Step 2: If we have cached schema, we still need to establish connection for execution
+      if (hasCachedSchemaAfterLoad) {
+        if (isCommandBasedConfig(config)) {
+          // Command-based MCPs need a process for execution
+          const mcpProcess = await this.startMCPProcess(config, true)
+          this.mcpProcesses.set(mcpId, mcpProcess)
+        } else {
+          // URL-based MCPs need an MCP client connection for tool calls
+          // Even with cached schema, we need the client to execute tools
+          logger.info(
+            { mcpId, mcpName },
+            'Establishing MCP client connection for URL-based MCP with cached schema',
+          )
+          await this.connectMCPClient(mcpId, mcpName, config)
+        }
       }
 
       // Step 3: Get schema and TypeScript API (from cache or fetch)
@@ -787,38 +845,58 @@ export class WorkerManager {
         // Step 5: Convert schema to TypeScript API
         typescriptApi = this.schemaConverter.convertToTypeScript(tools)
 
-        // Cache the schema and TypeScript API
-        this.schemaCache.set(cacheKey, {
-          tools,
-          prompts,
-          typescriptApi,
-          configHash: this.hashConfig(mcpName, config),
-          cachedAt: new Date(),
-        })
-        logger.debug(
-          {
-            mcpId,
+        // Only cache if we got at least one tool (for URL-based MCPs)
+        // Empty results may indicate auth failures that shouldn't be cached
+        // Command-based MCPs may legitimately have 0 tools initially
+        const shouldCache =
+          tools.length > 0 || prompts.length > 0 || isCommandBasedConfig(config)
+
+        if (shouldCache) {
+          // Cache the schema and TypeScript API
+          this.schemaCache.set(cacheKey, {
+            tools,
+            prompts,
+            typescriptApi,
+            configHash: this.hashConfig(mcpName, config),
+            cachedAt: new Date(),
+          })
+          logger.debug(
+            {
+              mcpId,
+              mcpName,
+              cacheKey,
+              toolCount: tools.length,
+              promptCount: prompts.length,
+            },
+            'Cached MCP schema',
+          )
+
+          // Also save to persistent cache
+          saveCachedSchema({
             mcpName,
-            cacheKey,
+            configHash: this.hashConfig(mcpName, config),
+            tools,
+            prompts,
+            toolNames: tools.map((t) => t.name),
+            promptNames: prompts.map((p) => p.name),
             toolCount: tools.length,
             promptCount: prompts.length,
-          },
-          'Cached MCP schema',
-        )
-
-        // Also save to persistent cache
-        saveCachedSchema({
-          mcpName,
-          configHash: this.hashConfig(mcpName, config),
-          tools,
-          prompts,
-          toolNames: tools.map((t) => t.name),
-          promptNames: prompts.map((p) => p.name),
-          toolCount: tools.length,
-          promptCount: prompts.length,
-          // typescriptApi omitted to save disk space (can regenerate if needed)
-          cachedAt: new Date().toISOString(),
-        })
+            // typescriptApi omitted to save disk space (can regenerate if needed)
+            cachedAt: new Date().toISOString(),
+          })
+        } else {
+          // Log warning for URL-based MCPs that returned 0 tools
+          logger.warn(
+            {
+              mcpId,
+              mcpName,
+              url: !isCommandBasedConfig(config) ? config.url : undefined,
+              toolCount: tools.length,
+              promptCount: prompts.length,
+            },
+            'URL-based MCP returned 0 tools and 0 prompts - not caching (may indicate auth issue)',
+          )
+        }
       }
 
       // Step 5: Create Worker isolate configuration
@@ -1283,6 +1361,47 @@ export class WorkerManager {
         )
       }
     })
+  }
+
+  /**
+   * Connect MCP client for URL-based MCP (without fetching schema)
+   * Used when schema is loaded from cache but we still need an active connection
+   */
+  private async connectMCPClient(
+    mcpId: string,
+    mcpName: string,
+    config: MCPConfig,
+  ): Promise<void> {
+    if (isCommandBasedConfig(config)) {
+      throw new Error('connectMCPClient should only be used for URL-based MCPs')
+    }
+
+    const url = new URL(config.url)
+    const transportOptions: { requestInit?: RequestInit } = {}
+
+    if (config.headers) {
+      transportOptions.requestInit = {
+        headers: config.headers,
+      }
+    }
+
+    const transport = new StreamableHTTPClientTransport(url, transportOptions)
+    const client = new Client(
+      { name: 'mcpguard', version: '0.1.0' },
+      { capabilities: {} },
+    )
+
+    const connectStartTime = Date.now()
+    await client.connect(transport, { timeout: 10000 })
+    const connectTime = Date.now() - connectStartTime
+
+    // Store client for later use
+    this.mcpClients.set(mcpId, client)
+
+    logger.info(
+      { mcpId, mcpName, connectTimeMs: connectTime },
+      'MCP client connected for cached schema',
+    )
   }
 
   private async fetchMCPSchema(
