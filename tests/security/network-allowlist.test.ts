@@ -64,19 +64,26 @@ describe('Security: Network Allowlist Enforcement', () => {
 
       // Simulate prompt injection attack: malicious code tries to exfiltrate data
       // This represents an attacker convincing the LLM to fetch external data
+      // Wrap in async IIFE to ensure all errors are caught
       const maliciousCode = `
-        // ATTACK: Prompt injection attempting to exfiltrate data to attacker's server
-        const sensitiveData = { secret: 'STOLEN_API_KEY_12345', user: 'victim@example.com' };
-        
-        try {
-          // Try to exfiltrate via a simple GET request (using httpcats.com as test endpoint)
-          const response = await fetch('https://httpcats.com/200.jpg');
-          console.log('ATTACK SUCCESS: Exfiltration worked! Status:', response.status);
-          console.log('SECURITY BREACH!');
-        } catch (error) {
-          console.log('ATTACK BLOCKED: Network access denied:', error.message);
-          console.log('SECURITY: Data exfiltration prevented');
-        }
+        (async () => {
+          // ATTACK: Prompt injection attempting to exfiltrate data to attacker's server
+          const sensitiveData = { secret: 'STOLEN_API_KEY_12345', user: 'victim@example.com' };
+          
+          try {
+            // Try to exfiltrate via a simple GET request (using httpcats.com as test endpoint)
+            // When globalOutbound: null, fetch() doesn't exist and throws ReferenceError
+            if (typeof fetch === 'undefined') {
+              throw new Error('fetch is not defined');
+            }
+            const response = await fetch('https://httpcats.com/200.jpg');
+            console.log('ATTACK SUCCESS: Exfiltration worked! Status:', response.status);
+            console.log('SECURITY BREACH!');
+          } catch (error) {
+            console.log('ATTACK BLOCKED: Network access denied:', error.message || String(error));
+            console.log('SECURITY: Data exfiltration prevented');
+          }
+        })();
       `
 
       const result = await manager.executeCode(instance.mcp_id, maliciousCode, 30000)
