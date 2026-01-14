@@ -1472,10 +1472,6 @@ export class WorkerManager {
                 throw new Error(`Worker execution failed: ${response.status} ${errorText}`);
             }
             const result = (await response.json());
-            if (wranglerProcess) {
-                await this.killWranglerProcess(wranglerProcess);
-                wranglerProcess = null;
-            }
             if (isCLIMode) {
                 progress.updateStep(2, 'success');
                 progress.showFinal();
@@ -1558,9 +1554,6 @@ export class WorkerManager {
                     port,
                 }, 'Wrangler execution error');
             }
-            if (wranglerProcess) {
-                await this.killWranglerProcess(wranglerProcess);
-            }
             throw new WorkerError(`Wrangler execution failed: ${errorMessage}`, {
                 wrangler_stdout: wranglerStdout || '',
                 wrangler_stderr: wranglerStderr || '',
@@ -1569,6 +1562,20 @@ export class WorkerManager {
                 port,
                 fatal: true,
             });
+        }
+        finally {
+            // CRITICAL: Always clean up Wrangler process, regardless of success or failure
+            // This ensures workerd processes don't get orphaned
+            if (wranglerProcess) {
+                try {
+                    await this.killWranglerProcess(wranglerProcess);
+                }
+                catch (cleanupError) {
+                    // Log but don't throw - cleanup errors shouldn't mask the original error
+                    logger.warn({ error: cleanupError, pid: wranglerProcess.pid }, 'Error during Wrangler process cleanup');
+                }
+                wranglerProcess = null;
+            }
         }
     }
     async killProcessTree(pid) {

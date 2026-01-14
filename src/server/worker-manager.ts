@@ -2406,12 +2406,6 @@ export class WorkerManager {
         }
       }
 
-      // Clean up - wait for process to terminate on Windows
-      if (wranglerProcess) {
-        await this.killWranglerProcess(wranglerProcess)
-        wranglerProcess = null
-      }
-
       // Step 3 complete: Target MCP execution successful
       if (isCLIMode) {
         progress.updateStep(2, 'success')
@@ -2530,11 +2524,6 @@ export class WorkerManager {
         )
       }
 
-      // Clean up on error - wait for process to terminate
-      if (wranglerProcess) {
-        await this.killWranglerProcess(wranglerProcess)
-      }
-
       // Include Wrangler output in error details for debugging
       // Mark as fatal - Wrangler execution failures prevent code execution entirely
       throw new WorkerError(`Wrangler execution failed: ${errorMessage}`, {
@@ -2545,6 +2534,21 @@ export class WorkerManager {
         port,
         fatal: true, // Wrangler failures are fatal - cannot execute code without Worker runtime
       })
+    } finally {
+      // CRITICAL: Always clean up Wrangler process, regardless of success or failure
+      // This ensures workerd processes don't get orphaned
+      if (wranglerProcess) {
+        try {
+          await this.killWranglerProcess(wranglerProcess)
+        } catch (cleanupError) {
+          // Log but don't throw - cleanup errors shouldn't mask the original error
+          logger.warn(
+            { error: cleanupError, pid: wranglerProcess.pid },
+            'Error during Wrangler process cleanup',
+          )
+        }
+        wranglerProcess = null
+      }
     }
   }
 
