@@ -2554,8 +2554,9 @@ export class WorkerManager {
 
   /**
    * Kill a process and all its children (process tree)
-   * On Windows, uses taskkill to kill the process tree
-   * On Unix, uses SIGTERM/SIGKILL with process group
+   * Cross-platform implementation:
+   * - Windows: uses taskkill /T to kill process tree by parent-child relationship
+   * - macOS/Linux: uses process group kill (-pid) with fallback to pkill -P
    */
   private async killProcessTree(pid: number): Promise<void> {
     // Validate PID is a positive integer to prevent command injection
@@ -2566,8 +2567,9 @@ export class WorkerManager {
     return new Promise<void>((resolve) => {
       if (process.platform === 'win32') {
         // On Windows, use taskkill to kill the process tree
-        // /F = force kill, /T = kill child processes, /PID = process ID
-        // Use spawn with arguments instead of exec with string interpolation to prevent command injection
+        // /F = force kill, /T = kill child processes (by parent-child relationship)
+        // /PID = process ID
+        // This works regardless of process groups - it traverses the process tree
         const taskkillProcess = spawn(
           'taskkill',
           ['/F', '/T', '/PID', String(pid)],
@@ -2587,22 +2589,51 @@ export class WorkerManager {
           resolve()
         })
       } else {
-        // On Unix, try SIGTERM first, then SIGKILL
-        // Use process group to kill children
-        try {
-          process.kill(-pid, 'SIGTERM')
-          setTimeout(() => {
-            try {
-              process.kill(-pid, 'SIGKILL')
-            } catch {
-              // Process might already be dead
-            }
-            resolve()
-          }, 1000)
-        } catch {
-          // Process might already be dead
-          resolve()
+        // On Unix (macOS/Linux), use multiple strategies to ensure all children are killed:
+        // 1. First try process group kill (works when spawned with detached: true)
+        // 2. Then use pkill -P as fallback (kills by parent PID, works even if child changed group)
+        // 3. Finally send signal to the main process
+
+        const killWithSignal = (signal: NodeJS.Signals) => {
+          // Try process group kill first (negative PID targets the process group)
+          try {
+            process.kill(-pid, signal)
+          } catch {
+            // Process group might not exist or process already dead
+          }
+
+          // Fallback: Use pkill to kill children by parent PID
+          // This works even if child processes changed their process group
+          // -P flag kills processes whose parent is the specified PID
+          try {
+            const pkillProcess = spawn(
+              'pkill',
+              [`-${signal}`, '-P', String(pid)],
+              { stdio: 'ignore' },
+            )
+            pkillProcess.on('error', () => {
+              // pkill might not be available on all systems, ignore
+            })
+          } catch {
+            // Ignore errors
+          }
+
+          // Also try to kill the main process directly
+          try {
+            process.kill(pid, signal)
+          } catch {
+            // Process might already be dead
+          }
         }
+
+        // Send SIGTERM first (graceful shutdown)
+        killWithSignal('SIGTERM')
+
+        // After 1 second, send SIGKILL (force kill) if still running
+        setTimeout(() => {
+          killWithSignal('SIGKILL')
+          resolve()
+        }, 1000)
       }
     })
   }

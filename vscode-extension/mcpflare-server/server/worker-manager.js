@@ -1579,11 +1579,15 @@ export class WorkerManager {
         }
     }
     async killProcessTree(pid) {
+        // Validate PID is a positive integer to prevent command injection
         if (!pid || !Number.isInteger(pid) || pid <= 0) {
             return;
         }
         return new Promise((resolve) => {
             if (process.platform === 'win32') {
+                // On Windows, use taskkill to kill the process tree
+                // /F = force kill, /T = kill child processes (by parent-child relationship)
+                // This works regardless of process groups - it traverses the process tree
                 const taskkillProcess = spawn('taskkill', ['/F', '/T', '/PID', String(pid)], {
                     stdio: 'ignore',
                     shell: false,
@@ -1596,20 +1600,43 @@ export class WorkerManager {
                 });
             }
             else {
-                try {
-                    process.kill(-pid, 'SIGTERM');
-                    setTimeout(() => {
-                        try {
-                            process.kill(-pid, 'SIGKILL');
-                        }
-                        catch {
-                        }
-                        resolve();
-                    }, 1000);
-                }
-                catch {
+                // On Unix (macOS/Linux), use multiple strategies to ensure all children are killed
+                const killWithSignal = (signal) => {
+                    // Try process group kill first (negative PID targets the process group)
+                    try {
+                        process.kill(-pid, signal);
+                    }
+                    catch {
+                        // Process group might not exist or process already dead
+                    }
+                    // Fallback: Use pkill to kill children by parent PID
+                    // This works even if child processes changed their process group
+                    try {
+                        const pkillProcess = spawn('pkill', ['-' + signal, '-P', String(pid)], {
+                            stdio: 'ignore',
+                        });
+                        pkillProcess.on('error', () => {
+                            // pkill might not be available on all systems, ignore
+                        });
+                    }
+                    catch {
+                        // Ignore errors
+                    }
+                    // Also try to kill the main process directly
+                    try {
+                        process.kill(pid, signal);
+                    }
+                    catch {
+                        // Process might already be dead
+                    }
+                };
+                // Send SIGTERM first (graceful shutdown)
+                killWithSignal('SIGTERM');
+                // After 1 second, send SIGKILL (force kill) if still running
+                setTimeout(() => {
+                    killWithSignal('SIGKILL');
                     resolve();
-                }
+                }, 1000);
             }
         });
     }
