@@ -161,8 +161,15 @@ describe('Security: MCP Isolation', () => {
       }
     }
     
+    // Shutdown the manager to kill all processes (Wrangler, workerd, MCP processes)
+    try {
+      await manager.shutdown();
+    } catch {
+      // Ignore shutdown errors
+    }
+    
     // Give processes time to fully terminate
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 500));
   });
 
   afterAll(() => {

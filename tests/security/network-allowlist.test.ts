@@ -34,7 +34,14 @@ describe('Security: Network Allowlist Enforcement', () => {
         // Ignore cleanup errors
       }
     }
-    await new Promise(resolve => setTimeout(resolve, 100))
+    // Shutdown the manager to kill all processes (Wrangler, workerd, MCP processes)
+    try {
+      await manager.shutdown()
+    } catch {
+      // Ignore shutdown errors
+    }
+    // Give processes time to terminate
+    await new Promise(resolve => setTimeout(resolve, 500))
   })
 
   afterAll(() => {

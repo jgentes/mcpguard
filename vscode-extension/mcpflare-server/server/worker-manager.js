@@ -1262,10 +1262,14 @@ export class WorkerManager {
                 '--port',
                 port.toString(),
             ];
+            // Use detached: true on Unix so we can kill the entire process group (including workerd)
             wranglerProcess = spawn(npxCmd, wranglerArgs, {
                 cwd: wranglerCwd,
                 stdio: ['ignore', 'pipe', 'pipe'],
                 shell: isWindows,
+                // detached creates a new process group, allowing process.kill(-pid) to kill all children
+                // This is essential because Wrangler spawns workerd as a child process
+                detached: !isWindows, // Only on Unix - Windows handles this differently with taskkill /T
             });
             let spawnError = null;
             let errorHandled = false;

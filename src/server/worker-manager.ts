@@ -2121,10 +2121,14 @@ export class WorkerManager {
 
       // Spawn Wrangler process
       // Note: spawn doesn't throw synchronously - errors come through 'error' event
+      // Use detached: true on Unix so we can kill the entire process group (including workerd)
       wranglerProcess = spawn(npxCmd, wranglerArgs, {
         cwd: wranglerCwd, // CRITICAL: Use project root, not process.cwd()
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: isWindows,
+        // detached creates a new process group, allowing process.kill(-pid) to kill all children
+        // This is essential because Wrangler spawns workerd as a child process
+        detached: !isWindows, // Only on Unix - Windows handles this differently with taskkill /T
       })
 
       // Handle spawn errors (e.g., npx/wrangler not found)

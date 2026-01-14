@@ -49,6 +49,13 @@ describe('MCP Lifecycle Integration', () => {
       }
     }
 
+    // Shutdown the manager to kill all processes (Wrangler, workerd, MCP processes)
+    try {
+      await manager.shutdown()
+    } catch {
+      // Ignore shutdown errors
+    }
+
     // Give processes time to fully terminate
     await new Promise((resolve) => setTimeout(resolve, 100))
     // Clean up test configs after each test
