@@ -14,8 +14,7 @@
     "draft": false
   },
   "npm": {
-    "publish": true,
-    "publishArgs": ["--provenance", "--access", "public"],
+    "publish": false,
     "skipChecks": true
   },
   "hooks": {

@@ -2,7 +2,7 @@
   "name": "mcpflare",
   "displayName": "MCPflare",
   "description": "Use local MCP servers securely with zero-trust isolation while reducing context window token usage by up to 98%",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "forgedapps",
   "license": "MIT",
   "author": {

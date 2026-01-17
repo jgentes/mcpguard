@@ -81,51 +81,66 @@ jobs:
             fi
           fi
 
-      - name: Release
-        run: npx release-it --${{ github.event.inputs.release-type }} --ci
+      - name: Release (git only - no npm publish)
+        run: npx release-it ${{ github.event.inputs.release-type }} --ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
-          # OIDC authentication is handled automatically by setup-node
+          # npm publish is disabled in release-it config - we do it manually after git verification
 
-      - name: Verify version was updated and pushed
+      - name: Verify git operations succeeded
         run: |
-          echo "Verifying release-it updated package.json and pushed changes..."
+          echo "Verifying git commit, tag, and push succeeded..."
           # Fetch latest changes to see the commit release-it made
           git fetch origin
-          # Check if package.json was updated
+          # Get the updated version
           UPDATED_VERSION=$(node -p "require('./package.json').version")
           VSCODE_VERSION=$(node -p "require('./vscode-extension/package.json').version")
           echo "Updated package.json version: $UPDATED_VERSION"
           echo "VSCode extension version: $VSCODE_VERSION"
+          
           # Verify versions are in sync
           if [ "$UPDATED_VERSION" != "$VSCODE_VERSION" ]; then
             echo "::error::Version mismatch after release: Main ($UPDATED_VERSION) != VSCode extension ($VSCODE_VERSION)"
             exit 1
           fi
-          echo "✅ Versions are in sync: $UPDATED_VERSION"
-          # Verify the commit exists
-          if git log --oneline -1 | grep -q "chore: release v$UPDATED_VERSION"; then
-            echo "✅ Version bump commit found: chore: release v$UPDATED_VERSION"
-          else
-            echo "⚠️  Warning: Could not find release commit. This may be normal if release-it failed or skipped git steps."
+          
+          # CRITICAL: Verify commit exists locally
+          if ! git log --oneline -1 | grep -q "chore: release v$UPDATED_VERSION"; then
+            echo "::error::Release commit not found locally: chore: release v$UPDATED_VERSION"
+            echo "Git operations failed - aborting npm publish"
+            exit 1
           fi
-          # Verify the tag exists
-          if git tag -l | grep -q "^v$UPDATED_VERSION$"; then
-            echo "✅ Release tag found: v$UPDATED_VERSION"
-          else
-            echo "⚠️  Warning: Could not find release tag v$UPDATED_VERSION"
+          echo "✅ Release commit found locally: chore: release v$UPDATED_VERSION"
+          
+          # CRITICAL: Verify tag exists locally
+          if ! git tag -l | grep -q "^v$UPDATED_VERSION$"; then
+            echo "::error::Release tag not found locally: v$UPDATED_VERSION"
+            echo "Git operations failed - aborting npm publish"
+            exit 1
           fi
+          echo "✅ Release tag found locally: v$UPDATED_VERSION"
+          
+          # CRITICAL: Verify tag exists on remote (proves push succeeded)
+          if ! git ls-remote --tags origin | grep -q "refs/tags/v$UPDATED_VERSION$"; then
+            echo "::error::Release tag not found on remote: v$UPDATED_VERSION"
+            echo "Git push failed - aborting npm publish"
+            exit 1
+          fi
+          echo "✅ Release tag found on remote: v$UPDATED_VERSION"
+          
           # Verify CHANGELOG.md was updated
           if grep -q "^## \[$UPDATED_VERSION\]" CHANGELOG.md; then
             echo "✅ CHANGELOG.md updated with version $UPDATED_VERSION"
-            # Show the changelog entry for this version
-            echo ""
-            echo "Changelog entry for $UPDATED_VERSION:"
-            awk "/^## \[$UPDATED_VERSION\]/,/^## \[/{if (!/^## \[/) print}" CHANGELOG.md | head -20
           else
             echo "⚠️  Warning: CHANGELOG.md may not have been updated for version $UPDATED_VERSION"
           fi
-          # Note: GitHub release is created by release-it with changelog content
+          
           echo ""
-          echo "ℹ️  GitHub release 'v$UPDATED_VERSION' should be created by release-it with changelog content"
+          echo "✅ All git operations verified - version $UPDATED_VERSION is in the repository"
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NPM_CONFIG_PROVENANCE: true
+          # OIDC authentication is handled automatically by setup-node
+        # Only runs if git verification step succeeded
