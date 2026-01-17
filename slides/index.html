@@ -841,10 +841,78 @@
   </section>
 
   <!-- ============================================
-       SLIDE 4: Code Mode - Solution + New Risk
+       SLIDE 4: What is Code Mode?
+       ============================================ -->
+  <section class="slide" data-notes="Code mode flips the paradigm: instead of LLMs making tool calls with special tokens they barely understand, have them write TypeScript code—something they're expert at from training on millions of real projects. The Shakespeare analogy: tool calling is like asking Shakespeare to write in Mandarin after a month-long class. Code mode lets him write in English.">
+    <div class="kicker">A better approach</div>
+    <h2>What is Code Mode?</h2>
+    <p style="font-size: 1.15rem; color: var(--muted); margin-bottom: 1.5rem; max-width: 65ch;">Instead of LLMs making tool calls, have them <strong style="color: var(--accent);">write code</strong> that calls a TypeScript API.</p>
+    
+    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1.5rem; max-width: 950px; align-items: start;">
+      
+      <!-- Traditional Tool Calling -->
+      <div style="background: var(--card); border-radius: 12px; padding: 1.25rem; border-top: 4px solid var(--bad);">
+        <div style="font-family: var(--mono); font-size: 0.75rem; color: var(--bad); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.75rem;">Tool Calling</div>
+        <div style="font-family: var(--mono); font-size: 0.8rem; color: var(--muted); background: var(--panel); padding: 0.75rem; border-radius: 8px; line-height: 1.5;">
+          <span style="color: #666;">&lt;|tool_call|&gt;</span><br>
+          {"name": "search_repos",<br>
+          &nbsp;&nbsp;"args": {"query": "..."}}<br>
+          <span style="color: #666;">&lt;|end_tool_call|&gt;</span>
+        </div>
+        <div style="margin-top: 1rem; font-size: 0.85rem; color: var(--muted);">
+          <span style="color: var(--bad);">✗</span> Special tokens LLMs rarely see<br>
+          <span style="color: var(--bad);">✗</span> Synthetic training data only<br>
+          <span style="color: var(--bad);">✗</span> One call per round-trip
+        </div>
+      </div>
+      
+      <!-- Arrow -->
+      <div style="display: flex; align-items: center; padding-top: 3rem;">
+        <div style="font-size: 2rem; color: var(--accent);">→</div>
+      </div>
+      
+      <!-- Code Mode -->
+      <div style="background: var(--card); border-radius: 12px; padding: 1.25rem; border-top: 4px solid var(--good);">
+        <div style="font-family: var(--mono); font-size: 0.75rem; color: var(--good); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.75rem;">Code Mode</div>
+        <div style="font-family: var(--mono); font-size: 0.8rem; color: var(--accent); background: var(--panel); padding: 0.75rem; border-radius: 8px; line-height: 1.5;">
+          <span style="color: #888;">const</span> repos = <span style="color: #888;">await</span><br>
+          &nbsp;&nbsp;github.search_repos({<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;query: <span style="color: #a5d6ff;">"typescript"</span><br>
+          &nbsp;&nbsp;});
+        </div>
+        <div style="margin-top: 1rem; font-size: 0.85rem; color: var(--muted);">
+          <span style="color: var(--good);">✓</span> Real TypeScript syntax<br>
+          <span style="color: var(--good);">✓</span> Millions of training examples<br>
+          <span style="color: var(--good);">✓</span> Batch multiple calls
+        </div>
+      </div>
+      
+    </div>
+    
+    <!-- Shakespeare Analogy -->
+    <div style="margin-top: 2rem; padding: 1.25rem 1.5rem; background: linear-gradient(135deg, rgba(167,139,250,0.15), rgba(167,139,250,0.05)); border-radius: 12px; border-left: 4px solid var(--accent2); max-width: 850px;">
+      <div style="display: flex; align-items: flex-start; gap: 1rem;">
+        <span style="font-size: 2rem;">🎭</span>
+        <div>
+          <div style="font-size: 1.1rem; font-style: italic; color: var(--text); line-height: 1.5;">
+            "Making an LLM perform tasks with tool calling is like putting <strong style="color: var(--accent2);">Shakespeare through a month-long class in Mandarin</strong> and then asking him to write a play in it."
+          </div>
+          <div style="font-size: 0.9rem; color: var(--muted); margin-top: 0.5rem;">
+            Code mode lets Shakespeare write in English — and <strong>LLMs have seen a lot of code</strong>.
+          </div>
+          <div style="font-size: 0.8rem; margin-top: 0.75rem;">
+            <a href="https://blog.cloudflare.com/code-mode/" target="_blank" style="color: var(--accent); text-decoration: none;">— Cloudflare: "Code Mode: the better way to use MCP"</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================
+       SLIDE 5: Code Mode - Solution + New Risk
        ============================================ -->
   <section class="slide" data-notes="Code mode solves the intermediate results problem - data stays in the sandbox, only final result returns. BUT this means running arbitrary code, which opens attack vectors.">
-    <div class="kicker">The solution</div>
+    <div class="kicker">The benefit</div>
     <h2>Code mode keeps data local</h2>
     <p style="font-size: 1.1rem; color: var(--muted); margin-bottom: 1.5rem;">Instead of passing data through context, run code that processes it locally.</p>
     
@@ -914,10 +982,10 @@
   </section>
 
   <!-- ============================================
-       SLIDE 4: What We Need
+       SLIDE 6: What We Need
        ============================================ -->
   <section class="slide" data-notes="Now that we've identified code mode as the efficiency solution but shown its risks, lay out what an ideal solution requires. This sets up MCPflare as the answer.">
-    <div class="kicker">The requirements</div>
+    <div class="kicker">The challenge</div>
     <h2>What we need</h2>
     <p style="font-size: 1.1rem; color: var(--muted); margin-bottom: 2rem;">To get code mode efficiency without the risks, we need:</p>
     
@@ -994,7 +1062,7 @@
   </section>
 
   <!-- ============================================
-       SLIDE 6: Introducing MCPflare
+       SLIDE 7: Introducing MCPflare
        ============================================ -->
   <section class="slide" data-notes="Now introduce MCPflare as the solution that meets all the requirements. Show the extension screenshot and stats.">
     <div class="kicker">The solution</div>

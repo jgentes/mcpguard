@@ -9,7 +9,7 @@ const config = {
   output: 'export',
   images: { unoptimized: true },
   trailingSlash: true,
-  basePath: '/mcpflare',
+  // basePath removed - site is deployed at root domain, not subdirectory
 };
 
 export default withMDX(config);
