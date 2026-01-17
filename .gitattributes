@@ -1,0 +1,6 @@
+# Ensure shell scripts always use LF line endings (required for Linux/CI)
+*.sh text eol=lf
+.husky/* text eol=lf
+
+# Default behavior for text files
+* text=auto
