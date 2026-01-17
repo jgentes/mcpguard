@@ -90,3 +90,18 @@ Create a new release by analyzing commits, determining version bump, generating 
 - CI will automatically publish to npm when it sees the version tag
 - If tests fail, fix them and the push will retry automatically
 - If a tag push fails but commits succeeded, delete the remote tag and retry
+
+### Troubleshooting:
+
+**"Startup failure" in Publish workflow:**
+- Check GitHub Actions permissions - third-party actions may be blocked
+- The workflow uses `gh release create` instead of third-party actions to avoid permission issues
+- If third-party actions are blocked, use GitHub's built-in `gh` CLI commands
+
+**"This workflow does not exist":**
+- The workflow file is `.github/workflows/release.yml` (name: "Publish")
+- Triggered by pushing tags matching `v*`
+
+**Version already published:**
+- npm doesn't allow re-publishing the same version
+- Bump to a new version and retry
