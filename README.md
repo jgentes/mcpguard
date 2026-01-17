@@ -10,7 +10,7 @@
 
 ## 🛡️ How It Works: A Simple Example
 
-![MCPflare Flowchart Overview](@assets/flowchart.png)
+![MCPflare Flowchart Overview](./assets/flowchart.png)
 
 ### Real Attack Example
 
