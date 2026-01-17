@@ -1,13 +1,16 @@
 {
   "git": {
+    "commit": true,
     "commitMessage": "chore: release v${version}",
+    "tag": true,
     "tagName": "v${version}",
+    "push": true,
     "requireCleanWorkingDir": false,
     "requireUpstream": false
   },
   "github": {
     "release": true,
-    "releaseName": "Release ${version}",
+    "releaseName": "v${version}",
     "draft": false
   },
   "npm": {
@@ -15,7 +18,9 @@
     "publishArgs": ["--provenance", "--access", "public"],
     "skipChecks": true
   },
-  "hooks": {},
+  "hooks": {
+    "after:bump": "node scripts/sync-vscode-extension-version.js"
+  },
   "plugins": {
     "@release-it/conventional-changelog": {
       "preset": {

@@ -56,9 +56,76 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Check version sync
+        run: |
+          CURRENT_NPM_VERSION=$(npm view mcpflare version 2>/dev/null || echo "0.0.0")
+          CURRENT_PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "Current npm version: $CURRENT_NPM_VERSION"
+          echo "Current package.json version: $CURRENT_PKG_VERSION"
+          if [ "$CURRENT_NPM_VERSION" != "0.0.0" ]; then
+            # Compare versions using node (simple numeric comparison for major.minor.patch)
+            VERSION_COMPARE=$(node -e "
+              const npm = '$CURRENT_NPM_VERSION'.split('.').map(Number);
+              const pkg = '$CURRENT_PKG_VERSION'.split('.').map(Number);
+              for (let i = 0; i < 3; i++) {
+                if (npm[i] > pkg[i]) { process.exit(1); }
+                if (npm[i] < pkg[i]) { process.exit(0); }
+              }
+              process.exit(0);
+            ")
+            if [ $? -ne 0 ]; then
+              echo "::error::Version mismatch: npm has $CURRENT_NPM_VERSION (higher) but package.json has $CURRENT_PKG_VERSION"
+              echo "release-it will bump the version, but ensure package.json is at least at $CURRENT_NPM_VERSION first."
+              echo "If $CURRENT_NPM_VERSION was published manually, update package.json to match."
+              exit 1
+            fi
+          fi
+
       - name: Release
-        run: npx release-it ${{ github.event.inputs.release-type }} --ci
+        run: npx release-it --${{ github.event.inputs.release-type }} --ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
           # OIDC authentication is handled automatically by setup-node
+
+      - name: Verify version was updated and pushed
+        run: |
+          echo "Verifying release-it updated package.json and pushed changes..."
+          # Fetch latest changes to see the commit release-it made
+          git fetch origin
+          # Check if package.json was updated
+          UPDATED_VERSION=$(node -p "require('./package.json').version")
+          VSCODE_VERSION=$(node -p "require('./vscode-extension/package.json').version")
+          echo "Updated package.json version: $UPDATED_VERSION"
+          echo "VSCode extension version: $VSCODE_VERSION"
+          # Verify versions are in sync
+          if [ "$UPDATED_VERSION" != "$VSCODE_VERSION" ]; then
+            echo "::error::Version mismatch after release: Main ($UPDATED_VERSION) != VSCode extension ($VSCODE_VERSION)"
+            exit 1
+          fi
+          echo "✅ Versions are in sync: $UPDATED_VERSION"
+          # Verify the commit exists
+          if git log --oneline -1 | grep -q "chore: release v$UPDATED_VERSION"; then
+            echo "✅ Version bump commit found: chore: release v$UPDATED_VERSION"
+          else
+            echo "⚠️  Warning: Could not find release commit. This may be normal if release-it failed or skipped git steps."
+          fi
+          # Verify the tag exists
+          if git tag -l | grep -q "^v$UPDATED_VERSION$"; then
+            echo "✅ Release tag found: v$UPDATED_VERSION"
+          else
+            echo "⚠️  Warning: Could not find release tag v$UPDATED_VERSION"
+          fi
+          # Verify CHANGELOG.md was updated
+          if grep -q "^## \[$UPDATED_VERSION\]" CHANGELOG.md; then
+            echo "✅ CHANGELOG.md updated with version $UPDATED_VERSION"
+            # Show the changelog entry for this version
+            echo ""
+            echo "Changelog entry for $UPDATED_VERSION:"
+            awk "/^## \[$UPDATED_VERSION\]/,/^## \[/{if (!/^## \[/) print}" CHANGELOG.md | head -20
+          else
+            echo "⚠️  Warning: CHANGELOG.md may not have been updated for version $UPDATED_VERSION"
+          fi
+          # Note: GitHub release is created by release-it with changelog content
+          echo ""
+          echo "ℹ️  GitHub release 'v$UPDATED_VERSION' should be created by release-it with changelog content"

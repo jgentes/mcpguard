@@ -35,6 +35,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Verify release-it configuration
+        run: |
+          SKIP_CHECKS_VALUE=$(node -p "require('./.release-it.json').npm.skipChecks")
+          if [ "$SKIP_CHECKS_VALUE" != "true" ]; then
+            echo "::error::npm.skipChecks must be true for Trusted Publishing (OIDC)"
+            echo "This is REQUIRED per release-it documentation."
+            exit 1
+          fi
+          echo "✅ release-it skipChecks configuration verified"
+      
+      - name: Verify version sync
+        run: |
+          MAIN_VERSION=$(node -p "require('./package.json').version")
+          VSCODE_VERSION=$(node -p "require('./vscode-extension/package.json').version")
+          if [ "$MAIN_VERSION" != "$VSCODE_VERSION" ]; then
+            echo "::error::Version mismatch: Main package ($MAIN_VERSION) != VSCode extension ($VSCODE_VERSION)"
+            echo "Please ensure versions are in sync before pushing."
+            exit 1
+          fi
+          echo "✅ Versions in sync: $MAIN_VERSION"
+      
       - name: Lint
         run: npm run lint
       

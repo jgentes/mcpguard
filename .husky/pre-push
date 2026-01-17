@@ -1,3 +1,29 @@
+# CRITICAL: Verify skipChecks is true for Trusted Publishing (OIDC)
+# This is REQUIRED per release-it docs: https://github.com/release-it/release-it/blob/main/docs/npm.md
+echo "Verifying release-it configuration..."
+SKIP_CHECKS_VALUE=$(node -p "require('./.release-it.json').npm.skipChecks")
+if [ "$SKIP_CHECKS_VALUE" != "true" ]; then
+  echo "❌ ERROR: npm.skipChecks must be true for Trusted Publishing (OIDC)"
+  echo "   This is REQUIRED per release-it documentation."
+  echo "   Current value: $SKIP_CHECKS_VALUE"
+  echo "   Please fix .release-it.json before pushing."
+  exit 1
+fi
+echo "✅ release-it skipChecks configuration verified"
+
+# Verify VSCode extension version is in sync with main package
+echo "Verifying VSCode extension version sync..."
+MAIN_VERSION=$(node -p "require('./package.json').version")
+VSCODE_VERSION=$(node -p "require('./vscode-extension/package.json').version")
+if [ "$MAIN_VERSION" != "$VSCODE_VERSION" ]; then
+  echo "❌ ERROR: Version mismatch detected!"
+  echo "   Main package.json version: $MAIN_VERSION"
+  echo "   VSCode extension version: $VSCODE_VERSION"
+  echo "   Please run: node scripts/sync-vscode-extension-version.js"
+  exit 1
+fi
+echo "✅ VSCode extension version in sync: $MAIN_VERSION"
+
 # Lint/format check before pushing (matches CI "npm run check")
 # Note: biome check includes both lint and format checks
 npm run check
